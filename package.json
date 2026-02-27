@@ -1,0 +1,13 @@
+{
+  "name": "house-of-muta",
+  "version": "1.0.0",
+  "description": "House of MUTA Private Office",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@line/bot-sdk": "^7.5.0",
+    "express": "^4.18.2"
+  }
+}
