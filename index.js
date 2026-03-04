@@ -1,3 +1,34 @@
+const express = require("express");
+const line = require("@line/bot-sdk");
+const { google } = require("googleapis");
+
+const app = express();
+
+const config = {
+  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
+  channelSecret: process.env.CHANNEL_SECRET,
+};
+
+const client = new line.Client(config);
+
+// ===== Google OAuth設定 =====
+const oauth2Client = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  "https://house-of-muta.onrender.com/oauth2callback"
+);
+
+// ===== LINE Webhook =====
+app.post("/webhook", line.middleware(config), async (req, res) => {
+  try {
+    const results = await Promise.all(req.body.events.map(handleEvent));
+    res.json(results);
+  } catch (err) {
+    console.error(err);
+    res.status(500).end();
+  }
+});
+
 async function handleEvent(event) {
 
   console.log("=== EVENT RECEIVED ===");
@@ -56,6 +87,8 @@ async function handleEvent(event) {
     type: "text",
     text: "House of MUTAが承ります。",
   });
-}app.listen(process.env.PORT || 3000, () => {
+}
+
+app.listen(process.env.PORT || 3000, () => {
   console.log("MUTA Private Office is running.");
 });
