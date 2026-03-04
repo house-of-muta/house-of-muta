@@ -1,126 +1,105 @@
+require("dotenv").config();
+
 const express = require("express");
 const line = require("@line/bot-sdk");
 const { google } = require("googleapis");
 const chrono = require("chrono-node");
-const OpenAI = require("openai");
 
 const app = express();
 
-const config = {
-  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.CHANNEL_SECRET,
+// ===== LINE設定 =====
+const lineConfig = {
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+  channelSecret: process.env.LINE_CHANNEL_SECRET
 };
 
-const client = new line.Client(config);
+const client = new line.Client(lineConfig);
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+// ===== Google設定 =====
+const auth = new google.auth.GoogleAuth({
+  credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY),
+  scopes: ["https://www.googleapis.com/auth/calendar"]
 });
 
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  "https://house-of-muta.onrender.com/oauth2callback"
-);
+const calendar = google.calendar({ version: "v3", auth });
 
-app.post("/webhook", line.middleware(config), async (req, res) => {
+// ===== Webhook =====
+app.post("/webhook", line.middleware(lineConfig), async (req, res) => {
   try {
-    const results = await Promise.all(req.body.events.map(handleEvent));
-    res.json(results);
+    const events = req.body.events;
+    for (const event of events) {
+      await handleEvent(event);
+    }
+    res.status(200).end();
   } catch (err) {
-    console.error(err);
+    console.error("❌ WEBHOOK ERROR:", err);
     res.status(500).end();
   }
 });
 
 async function handleEvent(event) {
+  console.log("=== EVENT RECEIVED ===");
+  console.log(JSON.stringify(event, null, 2));
+
   if (event.type !== "message" || event.message.type !== "text") {
     return null;
   }
 
-  const userMessage = event.message.text;
+  const userText = event.message.text;
 
-  // ===== 予約処理 =====
-  if (userMessage.includes("予約")) {
-    try {
-      const parsedDate = chrono.ja.parseDate(userMessage);
+  // ===== 日付解析 =====
+  const parsedDate = chrono.parseDate(userText);
 
-      if (!parsedDate) {
-        return reply(event.replyToken, "日時を認識できませんでした。例：予約 明日15時 田中様 初回相談");
-      }
-
-      const endDate = new Date(parsedDate.getTime() + 60 * 60 * 1000);
-
-      oauth2Client.setCredentials({
-        refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
-      });
-
-      const calendar = google.calendar({
-        version: "v3",
-        auth: oauth2Client,
-      });
-
-      const summary = "LINE予約";
-      const description = `
-予約者: ${event.source.userId}
-内容: ${userMessage}
-`;
-
-      await calendar.events.insert({
-        calendarId: "primary",
-        resource: {
-          summary,
-          description,
-          start: {
-            dateTime: parsedDate.toISOString(),
-            timeZone: "Asia/Tokyo",
-          },
-          end: {
-            dateTime: endDate.toISOString(),
-            timeZone: "Asia/Tokyo",
-          },
-        },
-      });
-
-      // ===== 管理者通知 =====
-      await client.pushMessage(process.env.ADMIN_LINE_USER_ID, {
-        type: "text",
-        text: `📢 新規予約\n日時: ${parsedDate}\n内容: ${userMessage}`,
-      });
-
-      return reply(event.replyToken, "予約を登録しました ✅");
-
-    } catch (error) {
-      console.error("Calendar Error:", error);
-      return reply(event.replyToken, "予約登録に失敗しました。");
-    }
+  if (!parsedDate) {
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "日付を認識できませんでした。"
+    });
   }
 
-  // ===== ChatGPT応答 =====
+  // ===== イベント作成 =====
+  const endDate = new Date(parsedDate.getTime() + 60 * 60 * 1000);
+
+  const calendarEvent = {
+    summary: userText,
+    start: {
+      dateTime: parsedDate.toISOString(),
+      timeZone: "Asia/Tokyo"
+    },
+    end: {
+      dateTime: endDate.toISOString(),
+      timeZone: "Asia/Tokyo"
+    }
+  };
+
   try {
-    const gpt = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: "あなたは高級コンシェルジュ秘書です。" },
-        { role: "user", content: userMessage },
-      ],
+    const response = await calendar.events.insert({
+      calendarId: process.env.GOOGLE_CALENDAR_ID,
+      resource: calendarEvent
     });
 
-    return reply(event.replyToken, gpt.choices[0].message.content);
+    console.log("✅ CALENDAR SUCCESS:", response.data.htmlLink);
 
-  } catch (err) {
-    console.error("GPT Error:", err);
-    return reply(event.replyToken, "現在AI応答に問題が発生しています。");
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "カレンダーに登録しました。"
+    });
+
+  } catch (error) {
+    console.log("❌ CALENDAR ERROR:", error.response?.data || error.message);
+
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "カレンダー登録に失敗しました。ログを確認してください。"
+    });
   }
 }
 
-function reply(token, text) {
-  return client.replyMessage(token, {
-    type: "text",
-    text,
-  });
-}
-
+// ===== サーバー起動 =====
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
 app.listen(process.env.PORT || 3000, () => {
   console.log("MUTA Ultimate Assistant is running.");
 });
