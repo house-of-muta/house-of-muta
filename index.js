@@ -8,23 +8,30 @@ const chrono = require("chrono-node");
 const app = express();
 
 // ===== LINE設定 =====
-const lineConfig = {
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.LINE_CHANNEL_SECRET
+const config = {
+  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
+  channelSecret: process.env.CHANNEL_SECRET
 };
 
-const client = new line.Client(lineConfig);
+const client = new line.Client(config);
 
-// ===== Google設定 =====
-const auth = new google.auth.GoogleAuth({
-  credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY),
-  scopes: ["https://www.googleapis.com/auth/calendar"]
+// ===== Google OAuth設定 =====
+const oauth2Client = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET
+);
+
+oauth2Client.setCredentials({
+  refresh_token: process.env.GOOGLE_REFRESH_TOKEN
 });
 
-const calendar = google.calendar({ version: "v3", auth });
+const calendar = google.calendar({
+  version: "v3",
+  auth: oauth2Client
+});
 
 // ===== Webhook =====
-app.post("/webhook", line.middleware(lineConfig), async (req, res) => {
+app.post("/webhook", line.middleware(config), async (req, res) => {
   try {
     const events = req.body.events;
     for (const event of events) {
@@ -32,7 +39,7 @@ app.post("/webhook", line.middleware(lineConfig), async (req, res) => {
     }
     res.status(200).end();
   } catch (err) {
-    console.error("❌ WEBHOOK ERROR:", err);
+    console.error("WEBHOOK ERROR:", err);
     res.status(500).end();
   }
 });
@@ -47,7 +54,6 @@ async function handleEvent(event) {
 
   const userText = event.message.text;
 
-  // ===== 日付解析 =====
   const parsedDate = chrono.parseDate(userText);
 
   if (!parsedDate) {
@@ -57,11 +63,11 @@ async function handleEvent(event) {
     });
   }
 
-  // ===== イベント作成 =====
   const endDate = new Date(parsedDate.getTime() + 60 * 60 * 1000);
 
   const calendarEvent = {
     summary: userText,
+    description: "LINEから自動登録",
     start: {
       dateTime: parsedDate.toISOString(),
       timeZone: "Asia/Tokyo"
@@ -74,7 +80,7 @@ async function handleEvent(event) {
 
   try {
     const response = await calendar.events.insert({
-      calendarId: process.env.GOOGLE_CALENDAR_ID,
+      calendarId: "primary",
       resource: calendarEvent
     });
 
@@ -82,7 +88,7 @@ async function handleEvent(event) {
 
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: "カレンダーに登録しました。"
+      text: "カレンダーに登録しました ✅"
     });
 
   } catch (error) {
@@ -90,16 +96,11 @@ async function handleEvent(event) {
 
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: "カレンダー登録に失敗しました。ログを確認してください。"
+      text: "カレンダー登録に失敗しました。"
     });
   }
 }
 
-// ===== サーバー起動 =====
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
 app.listen(process.env.PORT || 3000, () => {
-  console.log("MUTA Ultimate Assistant is running.");
+  console.log("Server running.");
 });
