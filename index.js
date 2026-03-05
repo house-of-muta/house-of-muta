@@ -74,13 +74,13 @@ async function handleEvent(event) {
     summary: userText,
     description: "LINE予約自動登録",
     start: {
-     dateTime: startDate,
-      timeZone: "Asia/Tokyo"
-    },
-    end: {
-      dateTime: endDate,
-      timeZone: "Asia/Tokyo"
-    }
+  dateTime: startDate.toISOString(),
+  timeZone: "Asia/Tokyo"
+},
+end: {
+  dateTime: endDate.toISOString(),
+  timeZone: "Asia/Tokyo"
+}
   };
 
   try {
