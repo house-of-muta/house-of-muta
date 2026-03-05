@@ -63,7 +63,10 @@ function getJapanTime(date) {
 
   ///return jst
 }
-
+// テスト実行
+const now = new Date(); // 今が 20:00 なら
+console.log("現在:", now);
+console.log("9時間前:", getMinus9Hours(now)); // 11:00 になる
 // ===============================================
 // ログ出力
 // ===============================================
