@@ -32,18 +32,27 @@ const calendar = google.calendar({
 
 // ===== Webhook =====
 app.post("/webhook", line.middleware(config), async (req, res) => {
+
   try {
+
     const events = req.body.events;
+
     for (const event of events) {
       await handleEvent(event);
     }
+
     res.status(200).end();
+
   } catch (err) {
+
     console.error("WEBHOOK ERROR:", err);
     res.status(500).end();
+
   }
+
 });
 
+// ===== メイン処理 =====
 async function handleEvent(event) {
 
   console.log("=== EVENT RECEIVED ===");
@@ -59,28 +68,39 @@ async function handleEvent(event) {
   const results = chrono.parse(userText);
 
   if (results.length === 0) {
+
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: "日時を認識できませんでした。\n例：\n明日15時 会食"
+      text: "日時を認識できませんでした。\n例：明日15時 会食"
     });
+
   }
 
   const startDate = results[0].start.date();
-  const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+
+  const endDate = results[0].end
+    ? results[0].end.date()
+    : new Date(startDate.getTime() + 60 * 60 * 1000);
 
   console.log("解析日時:", startDate);
 
+  // ===== カレンダー登録データ =====
   const calendarEvent = {
+
     summary: userText,
+
     description: "LINE予約自動登録",
+
     start: {
-  dateTime: startDate,
-  timeZone: 'Asia/Tokyo'
-},
-end: {
-  dateTime: endDate,
-  timeZone: 'Asia/Tokyo'
-}
+      dateTime: startDate.toISOString(),
+      timeZone: "Asia/Tokyo"
+    },
+
+    end: {
+      dateTime: endDate.toISOString(),
+      timeZone: "Asia/Tokyo"
+    }
+
   };
 
   try {
@@ -110,7 +130,12 @@ end: {
     });
 
   }
+
 }
+
+// ===== サーバー起動 =====
 app.listen(process.env.PORT || 3000, () => {
+
   console.log("Server running.");
+
 });
