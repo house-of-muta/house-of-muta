@@ -49,7 +49,7 @@ function getJapanTime(date) {
 
   const utc = date.getTime() + (date.getTimezoneOffset() * 60000)
 
-  const jst = new Date(utc + (getTime() + 60 * 60 * 1000))
+  const jst = new Date(utc + (9 * 60 * 60 * 1000))
 
   return jst
 }
