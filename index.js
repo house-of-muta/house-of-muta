@@ -45,14 +45,16 @@ const calendar = google.calendar({
 // 日本時間処理
 // ===============================================
 function getJapanTime(date) {
-  // 日本標準時（JST）の文字列に変換してから新しいDateオブジェクトを作る
-  const jstString = date.toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
-  return new Date(jstString);
-}
-
-// 使い方
-const now = new Date();
-console.log(getJapanTime(now));
+  // getUTC...メソッドを使って、純粋な世界標準時をベースに9時間を足す
+  const utc = Date.UTC(
+    date.getUTCFullYear(), 
+    date.getUTCMonth(), 
+    date.getUTCDate(), 
+    date.getUTCHours(), 
+    date.getUTCMinutes(), 
+    date.getUTCSeconds()
+  );
+  return new Date(utc + (9 * 60 * 60 * 1000));
 ///function getJapanTime(date) {
 
   ///const utc = date.getTime() + (date.getTimezoneOffset() * 60000)
