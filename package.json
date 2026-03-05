@@ -1,13 +1,14 @@
 {
-  "name": "house-of-muta",
-  "version": "2.0.0",
+  "name": "line-ai-secretary",
+  "version": "1.0.0",
   "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
   "dependencies": {
     "@line/bot-sdk": "^9.0.0",
     "express": "^4.18.2",
-    "googleapis": "^126.0.0",
-    "chrono-node": "^2.7.6",
-    "openai": "^4.0.0",
+    "googleapis": "^126.0.1",
     "dotenv": "^16.4.5"
   }
 }
