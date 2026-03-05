@@ -44,32 +44,16 @@ const calendar = google.calendar({
 // ===============================================
 // 日本時間処理
 // ===============================================
-function getMinus9Hours(date) {
-  // 元のDateオブジェクトを壊さないようにコピーを作成
-  const d = new Date(date.getTime());
-  
-  // 現在の時間から 9 を引く（日付を跨いでもJSが自動調整してくれます）
-  d.setHours(d.getHours() - 9);
-  
-  return d;
+
+function getJapanTime(date) {
+
+  const utc = date.getTime() + (date.getTimezoneOffset() * 60000)
+
+  const jst = new Date(utc + (9 * 60 * 60 * 1000))
+
+  return jst
 }
 
-// 実行例
-const now = new Date(); // 20:00 だとしたら
-const result = getMinus9Hours(now);
-console.log(result); // 11:00 が返る
-// ===============================================
-// ログ出力
-// ===============================================
-
-function log(text) {
-
-  console.log("=================================")
-  console.log(new Date())
-  console.log(text)
-  console.log("=================================")
-
-}
 
 // ===============================================
 // LINE Webhook
