@@ -78,7 +78,7 @@ async function handleEvent(event) {
       timeZone: "Asia/Tokyo"
     },
     end: {
-      dateTime: endDate.toISOString(),
+      dateTime: endDate,
       timeZone: "Asia/Tokyo"
     }
   };
