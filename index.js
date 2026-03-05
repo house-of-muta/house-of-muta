@@ -44,14 +44,22 @@ const calendar = google.calendar({
 // ===============================================
 // 日本時間処理
 // ===============================================
-
 function getJapanTime(date) {
+  // 日本標準時（JST）の文字列に変換してから新しいDateオブジェクトを作る
+  const jstString = date.toLocaleString("en-US", { timeZone: "Asia/Tokyo" });
+  return new Date(jstString);
+}
 
-  const utc = date.getTime() + (date.getTimezoneOffset() * 60000)
+// 使い方
+const now = new Date();
+console.log(getJapanTime(now));
+///function getJapanTime(date) {
 
-  const jst = new Date(utc + (9 * 60 * 60 * 1000))
+  ///const utc = date.getTime() + (date.getTimezoneOffset() * 60000)
 
-  return jst
+  ///const jst = new Date(utc + (9 * 60 * 60 * 1000))
+
+  ///return jst
 }
 
 // ===============================================
