@@ -54,7 +54,7 @@ function getJapanTime(date) {
     date.getUTCMinutes(), 
     date.getUTCSeconds()
   );
-  return new Date(utc + (9 * 60 * 60 * 1000));
+  return new Date(utc - (9 * 60 * 60 * 1000));
 ///function getJapanTime(date) {
 
   ///const utc = date.getTime() + (date.getTimezoneOffset() * 60000)
