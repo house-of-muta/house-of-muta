@@ -1,392 +1,364 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta charset="UTF-8">
-<title>MUTA AI秘書</title>
+// ===============================================
+// MUTA AI Secretary System
+// LINE × Google Calendar × Render
+// Version 2.0
+// ===============================================
 
-<meta name="viewport" content="width=device-width, initial-scale=1">
+require('dotenv').config()
 
-<style>
+const express = require('express')
+const line = require('@line/bot-sdk')
+const { google } = require('googleapis')
 
-body{
-font-family:Arial;
-background:#111;
-color:white;
-margin:0;
-padding:0;
+const app = express()
+
+// ===============================================
+// LINE設定
+// ===============================================
+
+const lineConfig = {
+  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
+  channelSecret: process.env.CHANNEL_SECRET
 }
 
-header{
-background:#000;
-padding:20px;
-text-align:center;
-font-size:24px;
-}
-
-.container{
-padding:20px;
-}
-
-.card{
-background:#1e1e1e;
-padding:20px;
-margin-bottom:20px;
-border-radius:10px;
-}
-
-button{
-padding:10px 15px;
-border:none;
-border-radius:5px;
-background:#4CAF50;
-color:white;
-cursor:pointer;
-}
-
-input{
-padding:10px;
-width:100%;
-margin-top:10px;
-background:#333;
-border:none;
-color:white;
-}
-
-textarea{
-width:100%;
-height:100px;
-background:#333;
-color:white;
-border:none;
-padding:10px;
-}
-
-.todo-item{
-display:flex;
-justify-content:space-between;
-padding:5px;
-border-bottom:1px solid #333;
-}
-
-.dark-toggle{
-position:absolute;
-top:20px;
-right:20px;
-}
-
-</style>
-</head>
-
-<body>
-
-<header>
-MUTA AI秘書
-<button class="dark-toggle" onclick="toggleDark()">🌙</button>
-</header>
-
-<div class="container">
-
-<div class="card">
-<h2>AIチャット</h2>
-<textarea id="chatInput"></textarea>
-<button onclick="sendChat()">送信</button>
-<div id="chatOutput"></div>
-</div>
-
-<div class="card">
-<h2>音声入力</h2>
-<button onclick="startVoice()">🎤話す</button>
-<div id="voiceText"></div>
-</div>
-
-<div class="card">
-<h2>ToDo</h2>
-<input id="todoInput" placeholder="やること">
-<button onclick="addTodo()">追加</button>
-<div id="todoList"></div>
-</div>
-
-<div class="card">
-<h2>メモ</h2>
-<textarea id="memo"></textarea>
-<button onclick="saveMemo()">保存</button>
-</div>
-
-<div class="card">
-<h2>Googleカレンダー</h2>
-<iframe src="https://calendar.google.com/calendar/embed?src=ja.japanese%23holiday%40group.v.calendar.google.com&ctz=Asia%2FTokyo"
-style="border:0"
-width="100%"
-height="300"></iframe>
-</div>
-
-</div>
-
-<script>
-function toggleDark(){
-
-if(document.body.style.background=="white"){
-
-document.body.style.background="#111"
-document.body.style.color="white"
-
-}else{
-
-document.body.style.background="white"
-document.body.style.color="black"
-
-}
-
-}
-
-function sendChat(){
-
-let input=document.getElementById("chatInput").value
-
-fetch("https://api.openai.com/v1/chat/completions",{
-
-method:"POST",
-
-headers:{
-"Content-Type":"application/json",
-"Authorization":"Bearer YOUR_API_KEY"
-},
-
-body:JSON.stringify({
-
-model:"gpt-4o-mini",
-
-messages:[
-{role:"user",content:input}
-]
-
-})
-
-})
-
-.then(r=>r.json())
-.then(data=>{
-
-let text=data.choices[0].message.content
-
-document.getElementById("chatOutput").innerHTML+=
-"<p>"+text+"</p>"
-
-speak(text)
-
-})
-
-}
-
-function speak(text){
-
-let uttr=new SpeechSynthesisUtterance(text)
-
-uttr.lang="ja-JP"
-
-speechSynthesis.speak(uttr)
-
-}
-
-function startVoice(){
-
-let rec=new webkitSpeechRecognition()
-
-rec.lang="ja-JP"
-
-rec.onresult=function(e){
-
-let text=e.results[0][0].transcript
-
-document.getElementById("voiceText").innerText=text
-
-document.getElementById("chatInput").value=text
-
-}
-
-rec.start()
-
-}
-
-function addTodo(){
-
-let input=document.getElementById("todoInput")
-
-let list=document.getElementById("todoList")
-
-let div=document.createElement("div")
-
-div.className="todo-item"
-
-div.innerHTML=
-
-"<span>"+input.value+"</span><button onclick='this.parentNode.remove()'>削除</button>"
-
-list.appendChild(div)
-
-saveTodo()
-
-input.value=""
-
-}
-
-function saveTodo(){
-
-localStorage.setItem(
-"todo",
-document.getElementById("todoList").innerHTML
+const client = new line.Client(lineConfig)
+
+// ===============================================
+// Google OAuth
+// ===============================================
+
+const auth = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET
 )
 
+auth.setCredentials({
+  refresh_token: process.env.GOOGLE_REFRESH_TOKEN
+})
+
+const calendar = google.calendar({
+  version: 'v3',
+  auth
+})
+
+// ===============================================
+// 日本時間処理
+// ===============================================
+
+function getJapanTime(date) {
+
+  const utc = date.getTime() + (date.getTimezoneOffset() * 60000)
+
+  const jst = new Date(utc + (9 * 60 * 60 * 1000))
+
+  return jst
 }
 
-function loadTodo(){
+// ===============================================
+// ログ出力
+// ===============================================
 
-let data=localStorage.getItem("todo")
+function log(text) {
 
-if(data){
-
-document.getElementById("todoList").innerHTML=data
+  console.log("=================================")
+  console.log(new Date())
+  console.log(text)
+  console.log("=================================")
 
 }
 
-}
+// ===============================================
+// LINE Webhook
+// ===============================================
 
-function saveMemo(){
+app.post('/webhook', line.middleware(lineConfig), (req, res) => {
 
-localStorage.setItem(
+  Promise
+    .all(req.body.events.map(handleEvent))
+    .then((result) => res.json(result))
+})
 
-"memo",
-document.getElementById("memo").value
+// ===============================================
+// メイン処理
+// ===============================================
 
+async function handleEvent(event) {
+
+  if (event.type !== 'message') {
+    return null
+  }
+
+  if (event.message.type !== 'text') {
+    return null
+  }
+
+  const text = event.message.text
+
+  log("受信: " + text)
+
+  // ============================
+  // ヘルプ
+  // ============================
+
+  if (text === "ヘルプ") {
+
+    return reply(event.replyToken,
+
+`
+AI秘書コマンド
+
+予定登録
+例
+3月10日 15時 会議
+
+一覧
+予定一覧
+
+削除
+予定削除
+`
 )
 
+  }
+
+  // ============================
+  // 予定一覧
+  // ============================
+
+  if (text === "予定一覧") {
+
+    const list = await getEvents()
+
+    return reply(event.replyToken, list)
+
+  }
+
+  // ============================
+  // 予定登録
+  // ============================
+
+  const eventData = parseEvent(text)
+
+  if (eventData) {
+
+    const result = await createEvent(eventData)
+
+    return reply(event.replyToken, result)
+
+  }
+
+  return reply(event.replyToken, "理解できませんでした\nヘルプ と入力してください")
+
 }
 
-function loadMemo(){
+// ===============================================
+// 予定解析
+// ===============================================
 
-let data=localStorage.getItem("memo")
+function parseEvent(text) {
 
-if(data){
+  const match = text.match(/(\d+)月(\d+)日\s*(\d+)時/)
 
-document.getElementById("memo").value=data
+  if (!match) return null
+
+  const month = parseInt(match[1])
+  const day = parseInt(match[2])
+  const hour = parseInt(match[3])
+
+  const title = text.replace(match[0], '').trim() || "予定"
+
+  return {
+    month,
+    day,
+    hour,
+    title
+  }
 
 }
 
+// ===============================================
+// Googleカレンダー登録
+// ===============================================
+
+async function createEvent(data) {
+
+  try {
+
+    const now = new Date()
+
+    const start = new Date(
+      now.getFullYear(),
+      data.month - 1,
+      data.day,
+      data.hour,
+      0,
+      0
+    )
+
+    const end = new Date(start)
+
+    end.setHours(start.getHours() + 1)
+
+    log("予定登録")
+
+    const response = await calendar.events.insert({
+
+      calendarId: 'primary',
+
+      resource: {
+
+        summary: data.title,
+
+        start: {
+
+          dateTime: start.toISOString(),
+          timeZone: "Asia/Tokyo"
+
+        },
+
+        end: {
+
+          dateTime: end.toISOString(),
+          timeZone: "Asia/Tokyo"
+
+        }
+
+      }
+
+    })
+
+    log("登録成功")
+
+    return `予定登録しました
+
+${data.month}月${data.day}日
+${data.hour}時
+${data.title}`
+
+  } catch (error) {
+
+    console.error(error)
+
+    return "カレンダー登録失敗"
+
+  }
+
 }
 
-window.onload=function(){
+// ===============================================
+// 予定一覧取得
+// ===============================================
 
-loadTodo()
+async function getEvents() {
 
-loadMemo()
+  try {
+
+    const now = new Date().toISOString()
+
+    const res = await calendar.events.list({
+
+      calendarId: 'primary',
+
+      timeMin: now,
+
+      maxResults: 10,
+
+      singleEvents: true,
+
+      orderBy: 'startTime'
+
+    })
+
+    const events = res.data.items
+
+    if (events.length === 0) {
+
+      return "予定はありません"
+
+    }
+
+    let text = "今後の予定\n\n"
+
+    events.forEach(e => {
+
+      const start = e.start.dateTime
+
+      text += `${start}\n${e.summary}\n\n`
+
+    })
+
+    return text
+
+  } catch (error) {
+
+    console.error(error)
+
+    return "取得エラー"
+
+  }
 
 }
-// ===== AI自動サジェスト =====
 
-function autoSuggest(){
+// ===============================================
+// LINE返信
+// ===============================================
 
-let todos=document.querySelectorAll(".todo-item span")
+function reply(token, text) {
 
-let text=""
+  return client.replyMessage(token, {
 
-todos.forEach(t=>{
+    type: 'text',
 
-text+=t.innerText+","
+    text: text
+
+  })
+
+}
+
+// ===============================================
+// サーバー
+// ===============================================
+
+app.get('/', (req, res) => {
+
+  res.send("MUTA AI SECRETARY RUNNING")
 
 })
 
-if(text.length>0){
+// ===============================================
+// 起動
+// ===============================================
 
-fetch("https://api.openai.com/v1/chat/completions",{
+const PORT = process.env.PORT || 3000
 
-method:"POST",
+app.listen(PORT, () => {
 
-headers:{
-"Content-Type":"application/json",
-"Authorization":"Bearer YOUR_API_KEY"
-},
-
-body:JSON.stringify({
-
-model:"gpt-4o-mini",
-
-messages:[
-{
-role:"user",
-content:"この予定から効率的な行動計画を作って:"+text
-}
-]
+  console.log("================================")
+  console.log("MUTA AI Secretary Started")
+  console.log("PORT:", PORT)
+  console.log("================================")
 
 })
 
-})
 
-.then(r=>r.json())
-.then(data=>{
+// ===============================================
+// 未来拡張（未実装）
+// ===============================================
 
-let res=data.choices[0].message.content
+// リマインド
+// ChatGPT連携
+// 予定削除
+// 天気連動
+// メモ
+// 音声入力
+// スプレッドシート連携
+// 家計簿
+// タスク管理
+// AI秘書会話
 
-let div=document.createElement("div")
-
-div.className="card"
-
-div.innerHTML="<h2>AI提案</h2>"+res
-
-document.querySelector(".container").appendChild(div)
-
-})
-
-}
-
-}
-
-setTimeout(autoSuggest,5000)
-
-// ===== AIスケジュール整理 =====
-
-function optimizeDay(){
-
-fetch("https://api.openai.com/v1/chat/completions",{
-
-method:"POST",
-
-headers:{
-"Content-Type":"application/json",
-"Authorization":"Bearer YOUR_API_KEY"
-},
-
-body:JSON.stringify({
-
-model:"gpt-4o-mini",
-
-messages:[
-{
-role:"user",
-content:"今日の最高効率スケジュールを作って"
-}
-]
-
-})
-
-})
-
-.then(r=>r.json())
-.then(data=>{
-
-alert(data.choices[0].message.content)
-
-})
-
-}
-
-// ===== PWA対応 =====
-
-if('serviceWorker' in navigator){
-
-navigator.serviceWorker.register('sw.js')
-
-}
-
+// ===============================================
+// END
+// ===============================================
 </script>
 
 </body>
