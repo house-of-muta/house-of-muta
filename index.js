@@ -45,6 +45,7 @@ app.post("/webhook", line.middleware(config), async (req, res) => {
 });
 
 async function handleEvent(event) {
+
   console.log("=== EVENT RECEIVED ===");
   console.log(JSON.stringify(event, null, 2));
 
@@ -54,22 +55,26 @@ async function handleEvent(event) {
 
   const userText = event.message.text;
 
-  const parsedDate = chrono.parseDate(userText);
+  // ===== 日時解析 =====
+  const results = chrono.parse(userText);
 
-  if (!parsedDate) {
+  if (results.length === 0) {
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: "日付を認識できませんでした。"
+      text: "日時を認識できませんでした。\n例：\n明日15時 会食"
     });
   }
 
-  const endDate = new Date(parsedDate.getTime() + 60 * 60 * 1000);
+  const startDate = results[0].start.date();
+  const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+
+  console.log("解析日時:", startDate);
 
   const calendarEvent = {
     summary: userText,
-    description: "LINEから自動登録",
+    description: "LINE予約自動登録",
     start: {
-      dateTime: parsedDate.toISOString(),
+      dateTime: startDate.toISOString(),
       timeZone: "Asia/Tokyo"
     },
     end: {
@@ -79,6 +84,7 @@ async function handleEvent(event) {
   };
 
   try {
+
     const response = await calendar.events.insert({
       calendarId: "primary",
       resource: calendarEvent
@@ -88,19 +94,23 @@ async function handleEvent(event) {
 
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: "カレンダーに登録しました ✅"
+      text:
+        "予約を登録しました✅\n\n" +
+        "内容：" + userText + "\n" +
+        "開始：" + startDate.toLocaleString("ja-JP")
     });
 
   } catch (error) {
+
     console.log("❌ CALENDAR ERROR:", error.response?.data || error.message);
 
     return client.replyMessage(event.replyToken, {
       type: "text",
       text: "カレンダー登録に失敗しました。"
     });
+
   }
 }
-
 app.listen(process.env.PORT || 3000, () => {
   console.log("Server running.");
 });
