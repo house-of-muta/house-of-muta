@@ -45,28 +45,13 @@ const calendar = google.calendar({
 // 日本時間処理
 // ===============================================
 function getJapanTime(date) {
-  // getUTC...メソッドを使って、純粋な世界標準時をベースに9時間を足す
-  const utc = Date.UTC(
-    date.getUTCFullYear(), 
-    date.getUTCMonth(), 
-    date.getUTCDate(), 
-    date.getUTCHours(), 
-    date.getUTCMinutes(), 
-    date.getUTCSeconds()
-  );
-  return new Date(utc - (9 * 60 * 60 * 1000));
-///function getJapanTime(date) {
 
-  ///const utc = date.getTime() + (date.getTimezoneOffset() * 60000)
+  const utc = date.getTime() + (date.getTimezoneOffset() * 60000)
 
-  ///const jst = new Date(utc + (9 * 60 * 60 * 1000))
+  const jst = new Date(utc - (9 * 60 * 60 * 1000))
 
-  ///return jst
+  return jst
 }
-// テスト実行
-const now = new Date(); // 今が 20:00 なら
-console.log("現在:", now);
-console.log("9時間前:", getMinus9Hours(now)); // 11:00 になる
 // ===============================================
 // ログ出力
 // ===============================================
