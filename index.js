@@ -92,12 +92,12 @@ async function handleEvent(event) {
     description: "LINE予約自動登録",
 
     start: {
-      dateTime: startDate.toISOString(),
+      dateTime: startDate,
       timeZone: "Asia/Tokyo"
     },
 
     end: {
-      dateTime: endDate.toISOString(),
+      dateTime: endDate,
       timeZone: "Asia/Tokyo"
     }
 
