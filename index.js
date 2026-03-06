@@ -1,97 +1,176 @@
-const express = require("express")
-const line = require("@line/bot-sdk")
+const express = require("express");
+const bodyParser = require("body-parser");
+const { google } = require("googleapis");
+const { OpenAI } = require("openai");
 
-const calendar = require("./calendar")
-const sheets = require("./sheets")
-const ai = require("./ai")
-const parser = require("./parser")
+const app = express();
+app.use(bodyParser.json());
 
-const app = express()
+const PORT = process.env.PORT || 10000;
 
-const config = {
-  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.CHANNEL_SECRET
+console.log("================================");
+console.log("MUTA AI Secretary Started");
+console.log("PORT:", PORT);
+console.log("================================");
+
+// ============================
+// OpenAI
+// ============================
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// ============================
+// Google Auth
+// ============================
+
+const auth = new google.auth.JWT(
+  process.env.GOOGLE_CLIENT_EMAIL,
+  null,
+  process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+  [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/calendar",
+  ]
+);
+
+const sheets = google.sheets({ version: "v4", auth });
+
+const SHEET_ID = process.env.SHEET_ID;
+
+// ============================
+// AI Chat
+// ============================
+
+async function askAI(message) {
+
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content: "あなたはMUTA専属の超優秀なAI秘書です。",
+      },
+      {
+        role: "user",
+        content: message,
+      },
+    ],
+  });
+
+  return response.choices[0].message.content;
 }
 
-const client = new line.Client(config)
+// ============================
+// 家計簿登録
+// ============================
 
-app.post("/webhook", line.middleware(config), async (req, res) => {
+async function addMoney(text) {
 
-  const events = req.body.events
+  const price = text.match(/[0-9]+/);
 
-  for (const event of events) {
-    await handleEvent(event)
-  }
+  if (!price) return;
 
-  res.status(200).end()
-})
+  const value = price[0];
 
-async function handleEvent(event) {
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SHEET_ID,
+    range: "money!A:C",
+    valueInputOption: "USER_ENTERED",
+    resource: {
+      values: [
+        [
+          new Date().toLocaleString(),
+          text,
+          value,
+        ],
+      ],
+    },
+  });
+}
+// ============================
+// タスク登録
+// ============================
 
-  if (event.type !== "message") return
+async function addTask(text) {
 
-  if (event.message.type !== "text") return
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SHEET_ID,
+    range: "task!A:B",
+    valueInputOption: "USER_ENTERED",
+    resource: {
+      values: [
+        [
+          new Date().toLocaleString(),
+          text,
+        ],
+      ],
+    },
+  });
+}
 
-  const text = event.message.text
+// ============================
+// Google Calendar
+// ============================
 
-  console.log("MESSAGE:", text)
+const calendar = google.calendar({
+  version: "v3",
+  auth,
+});
 
-  // 解析
-  const type = parser.detect(text)
+const CALENDAR_ID = "primary";
 
-  let reply = ""
+// ============================
+// 予定追加
+// ============================
 
-  try {
+async function addSchedule(title, date) {
 
-    if (type === "calendar_add") {
+  const event = {
+    summary: title,
+    start: {
+      dateTime: date,
+      timeZone: "Asia/Tokyo",
+    },
+    end: {
+      dateTime: date,
+      timeZone: "Asia/Tokyo",
+    },
+  };
 
-      reply = await calendar.add(text)
+  await calendar.events.insert({
+    calendarId: CALENDAR_ID,
+    resource: event,
+  });
 
-    } else if (type === "calendar_delete") {
+}
 
-      reply = await calendar.delete(text)
+// ============================
+// 予定削除
+// ============================
 
-    } else if (type === "task_add") {
+async function deleteSchedule(keyword) {
 
-      reply = await sheets.addTask(text)
+  const res = await calendar.events.list({
+    calendarId: CALENDAR_ID,
+    maxResults: 10,
+    singleEvents: true,
+    orderBy: "startTime",
+  });
 
-    } else if (type === "task_list") {
+  const events = res.data.items;
 
-      reply = await sheets.listTask()
+  for (let e of events) {
 
-    } else if (type === "money") {
+    if (e.summary.includes(keyword)) {
 
-      reply = await sheets.addMoney(text)
+      await calendar.events.delete({
+        calendarId: CALENDAR_ID,
+        eventId: e.id,
+      });
 
-    } else {
-
-      reply = await ai.chat(text)
-
+      return;
     }
-
-  } catch (e) {
-
-    console.log(e)
-
-    reply = "処理中にエラーが発生しました"
-
   }
-
-  return client.replyMessage(event.replyToken,{
-    type:"text",
-    text:reply
-  })
-
 }
-
-const PORT = process.env.PORT || 3000
-
-app.listen(PORT, () => {
-
-  console.log("================================")
-  console.log("MUTA AI Secretary Started")
-  console.log("PORT:", PORT)
-  console.log("================================")
-
-})
-// ===============================================
