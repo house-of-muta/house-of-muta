@@ -1,14 +1,10 @@
-// ==================================================
-// MUTA-E AI SECRETARY FINAL VERSION
-// ==================================================
-
 require("dotenv").config()
 
 const express = require("express")
 const bodyParser = require("body-parser")
 const { google } = require("googleapis")
-const { OpenAI } = require("openai")
 const line = require("@line/bot-sdk")
+const { OpenAI } = require("openai")
 
 const app = express()
 app.use(bodyParser.json())
@@ -16,297 +12,298 @@ app.use(bodyParser.json())
 const PORT = process.env.PORT || 3000
 
 
-// ==================================================
+// ================================
 // LINE
-// ==================================================
+// ================================
 
 const lineConfig = {
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.LINE_CHANNEL_SECRET
+ channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
+ channelSecret: process.env.LINE_CHANNEL_SECRET
 }
 
 const client = new line.Client(lineConfig)
 
 
-// ==================================================
+// ================================
 // OPENAI
-// ==================================================
+// ================================
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+ apiKey: process.env.OPENAI_API_KEY
 })
 
 
-// ==================================================
+// ================================
 // GOOGLE SHEETS
-// ==================================================
+// ================================
 
 const auth = new google.auth.JWT(
-  process.env.GOOGLE_CLIENT_EMAIL,
-  null,
-  process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g,"\n"),
-  ["https://www.googleapis.com/auth/spreadsheets"]
+ process.env.GOOGLE_CLIENT_EMAIL,
+ null,
+ process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g,"\n"),
+ ["https://www.googleapis.com/auth/spreadsheets"]
 )
 
 const sheets = google.sheets({
-  version:"v4",
-  auth
+ version:"v4",
+ auth
 })
 
 const SHEET_ID = process.env.SHEET_ID
 
 
-// ==================================================
+// ================================
 // AI CHAT
-// ==================================================
+// ================================
 
 async function askAI(text){
 
-  const completion = await openai.chat.completions.create({
+ const completion = await openai.chat.completions.create({
 
-    model:"gpt-4o-mini",
+  model:"gpt-4o-mini",
 
-    messages:[
-      {role:"system",content:"あなたは優秀なAI秘書です"},
-      {role:"user",content:text}
-    ]
+  messages:[
+   {role:"system",content:"あなたは優秀なAI秘書です"},
+   {role:"user",content:text}
+  ]
 
-  })
+ })
 
-  return completion.choices[0].message.content
-
+ return completion.choices[0].message.content
 }
 
 
 
-// ==================================================
+// ================================
 // MONEY
-// ==================================================
+// ================================
 
 async function addMoney(text){
 
-  const price = text.match(/[0-9]+/)
+ const price = text.match(/[0-9]+/)
 
-  if(!price) return
+ if(!price) return
 
-  await sheets.spreadsheets.values.append({
+ await sheets.spreadsheets.values.append({
 
-    spreadsheetId:SHEET_ID,
+  spreadsheetId:SHEET_ID,
+  range:"money!A:C",
+  valueInputOption:"USER_ENTERED",
 
-    range:"money!A:C",
+  resource:{
+   values:[
+    [
+     new Date().toLocaleString(),
+     text,
+     price[0]
+    ]
+   ]
+  }
 
-    valueInputOption:"USER_ENTERED",
-
-    resource:{
-      values:[
-        [
-          new Date().toLocaleString(),
-          text,
-          price[0]
-        ]
-      ]
-    }
-
-  })
+ })
 
 }
 
 
 
-// ==================================================
+// ================================
 // TASK
-// ==================================================
+// ================================
 
 async function addTask(text){
 
-  await sheets.spreadsheets.values.append({
+ await sheets.spreadsheets.values.append({
 
-    spreadsheetId:SHEET_ID,
+  spreadsheetId:SHEET_ID,
+  range:"task!A:C",
+  valueInputOption:"USER_ENTERED",
 
-    range:"task!A:C",
+  resource:{
+   values:[
+    [
+     new Date().toLocaleString(),
+     text,
+     "未完了"
+    ]
+   ]
+  }
 
-    valueInputOption:"USER_ENTERED",
-
-    resource:{
-      values:[
-        [
-          new Date().toLocaleString(),
-          text,
-          "未完了"
-        ]
-      ]
-    }
-
-  })
+ })
 
 }
 
 
 
-// ==================================================
-// SCHEDULE
-// ==================================================
+// ================================
+// SCHEDULE PARSER
+// ================================
+
+function parseSchedule(text){
+
+ let title = text
+ let date = new Date()
+
+ // 明日
+ if(text.includes("明日")){
+  date.setDate(date.getDate()+1)
+ }
+
+ // 今日
+ if(text.includes("今日")){
+ }
+
+ // 時刻
+ const timeMatch = text.match(/([0-9]{1,2})時/)
+
+ let hour = 9
+
+ if(timeMatch){
+  hour = parseInt(timeMatch[1])
+ }
+
+ date.setHours(hour)
+ date.setMinutes(0)
+
+ return {
+  title:title,
+  date:date.toLocaleString()
+ }
+
+}
+
+
+
+// ================================
+// ADD SCHEDULE
+// ================================
 
 async function addSchedule(text){
 
-  const prompt = `
-次の文章から予定を解析してください。
+ const schedule = parseSchedule(text)
 
-JSONのみ出力
+ await sheets.spreadsheets.values.append({
 
-{
-"title":"",
-"date":"",
-"time":""
-}
+  spreadsheetId:SHEET_ID,
+  range:"task!A:C",
+  valueInputOption:"USER_ENTERED",
 
-文章:
-${text}
-`
-
-  const res = await openai.chat.completions.create({
-
-    model:"gpt-4o-mini",
-
-    messages:[
-      {role:"user",content:prompt}
+  resource:{
+   values:[
+    [
+     schedule.date,
+     schedule.title,
+     "予定"
     ]
+   ]
+  }
 
-  })
-
-  const data = JSON.parse(res.choices[0].message.content)
-
-  await sheets.spreadsheets.values.append({
-
-    spreadsheetId:SHEET_ID,
-
-    range:"task!A:C",
-
-    valueInputOption:"USER_ENTERED",
-
-    resource:{
-      values:[
-        [
-          data.date+" "+data.time,
-          data.title,
-          "予定"
-        ]
-      ]
-    }
-
-  })
+ })
 
 }
 
 
 
-// ==================================================
+// ================================
 // MESSAGE
-// ==================================================
+// ================================
 
 async function handleMessage(event){
 
-  const text = event.message.text
+ const text = event.message.text
 
-  let reply = ""
+ let reply=""
 
-  try{
+ try{
 
-    if(text.includes("円")){
+  if(text.includes("円")){
 
-      await addMoney(text)
+   await addMoney(text)
 
-      reply="家計簿に登録しました"
-
-    }
-
-    else if(text.startsWith("タスク")){
-
-      await addTask(text.replace("タスク",""))
-
-      reply="タスク登録しました"
-
-    }
-
-    else if(
-      text.includes("明日") ||
-      text.includes("今日") ||
-      text.match(/[0-9]+時/)
-    ){
-
-      await addSchedule(text)
-
-      reply="予定登録しました"
-
-    }
-
-    else{
-
-      reply = await askAI(text)
-
-    }
+   reply="家計簿に登録しました"
 
   }
 
-  catch(e){
+  else if(text.startsWith("タスク")){
 
-    console.log(e)
+   await addTask(text.replace("タスク",""))
 
-    reply="日時を認識できませんでした"
+   reply="タスク登録しました"
 
   }
 
-  return client.replyMessage(event.replyToken,{
-    type:"text",
-    text:reply
-  })
+  else if(
+   text.includes("明日") ||
+   text.includes("今日") ||
+   text.match(/[0-9]+時/)
+  ){
+
+   await addSchedule(text)
+
+   reply="予定登録しました"
+
+  }
+
+  else{
+
+   reply = await askAI(text)
+
+  }
+
+ }
+
+ catch(e){
+
+  console.log(e)
+
+  reply="エラーが発生しました"
+
+ }
+
+ return client.replyMessage(event.replyToken,{
+  type:"text",
+  text:reply
+ })
 
 }
 
 
 
-// ==================================================
+// ================================
 // WEBHOOK
-// ==================================================
+// ================================
 
 app.post("/webhook",line.middleware(lineConfig),(req,res)=>{
 
-  Promise
-  .all(req.body.events.map(handleMessage))
-  .then(result=>res.json(result))
-  .catch(err=>{
-
-    console.error(err)
-
-    res.status(500).end()
-
-  })
+ Promise
+ .all(req.body.events.map(handleMessage))
+ .then(result=>res.json(result))
+ .catch(err=>{
+  console.error(err)
+  res.status(500).end()
+ })
 
 })
 
 
 
-// ==================================================
+// ================================
 // ROOT
-// ==================================================
+// ================================
 
 app.get("/",(req,res)=>{
 
-  res.send("MUTA-E AI SECRETARY RUNNING")
+ res.send("MUTA-E AI SECRETARY RUNNING")
 
 })
 
 
 
-// ==================================================
+// ================================
 // SERVER
-// ==================================================
+// ================================
 
 app.listen(PORT,()=>{
 
-  console.log("================================")
-  console.log("MUTA-E AI SECRETARY STARTED")
-  console.log("PORT:",PORT)
-  console.log("================================")
+ console.log("AI SECRETARY STARTED")
 
 })
