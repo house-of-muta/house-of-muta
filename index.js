@@ -31,7 +31,15 @@ app.post("/webhook", line.middleware(config), async (req, res) => {
 });
 
 async function handleEvent(event) {
-  if (event.type !== "message" || event.message.type !== "text") return;
+
+  if (event.type !== "message") return;
+
+  if (event.message.type !== "text") {
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "テキストのみ対応"
+    });
+  }
 
   const text = event.message.text;
 
