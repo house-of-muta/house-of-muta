@@ -188,6 +188,9 @@ async function modifyEvent(event, text) {
     text: "予定修正しました"
   });
 }
+app.get("/", (req, res) => {
+  res.send("bot running");
+});
 
 app.listen(process.env.PORT || 3000, () => {
   console.log("server running");
