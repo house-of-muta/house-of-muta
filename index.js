@@ -1,309 +1,186 @@
-require("dotenv").config()
+const express = require("express");
+const line = require("@line/bot-sdk");
+const chrono = require("chrono-node");
+const { google } = require("googleapis");
 
-const express = require("express")
-const bodyParser = require("body-parser")
-const { google } = require("googleapis")
-const line = require("@line/bot-sdk")
-const { OpenAI } = require("openai")
+const app = express();
 
-const app = express()
-app.use(bodyParser.json())
+const config = {
+  channelAccessToken: process.env.LINE_ACCESS_TOKEN,
+  channelSecret: process.env.LINE_CHANNEL_SECRET
+};
 
-const PORT = process.env.PORT || 3000
+const client = new line.Client(config);
 
+const auth = new google.auth.GoogleAuth({
+  keyFile: "credentials.json",
+  scopes: ["https://www.googleapis.com/auth/calendar"]
+});
 
-// ================================
-// LINE
-// ================================
+const calendar = google.calendar({ version: "v3", auth });
 
-const lineConfig = {
- channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
- channelSecret: process.env.LINE_CHANNEL_SECRET
-}
+const CALENDAR_ID = process.env.CALENDAR_ID;
 
-const client = new line.Client(lineConfig)
+app.post("/webhook", line.middleware(config), async (req, res) => {
+  Promise.all(req.body.events.map(handleEvent))
+    .then(() => res.end())
+    .catch(err => {
+      console.error(err);
+      res.status(500).end();
+    });
+});
 
+async function handleEvent(event) {
+  if (event.type !== "message" || event.message.type !== "text") return;
 
-// ================================
-// OPENAI
-// ================================
+  const text = event.message.text;
 
-const openai = new OpenAI({
- apiKey: process.env.OPENAI_API_KEY
-})
-
-
-// ================================
-// GOOGLE SHEETS
-// ================================
-
-const auth = new google.auth.JWT(
- process.env.GOOGLE_CLIENT_EMAIL,
- null,
- process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g,"\n"),
- ["https://www.googleapis.com/auth/spreadsheets"]
-)
-
-const sheets = google.sheets({
- version:"v4",
- auth
-})
-
-const SHEET_ID = process.env.SHEET_ID
-
-
-// ================================
-// AI CHAT
-// ================================
-
-async function askAI(text){
-
- const completion = await openai.chat.completions.create({
-
-  model:"gpt-4o-mini",
-
-  messages:[
-   {role:"system",content:"あなたは優秀なAI秘書です"},
-   {role:"user",content:text}
-  ]
-
- })
-
- return completion.choices[0].message.content
-}
-
-
-
-// ================================
-// MONEY
-// ================================
-
-async function addMoney(text){
-
- const price = text.match(/[0-9]+/)
-
- if(!price) return
-
- await sheets.spreadsheets.values.append({
-
-  spreadsheetId:SHEET_ID,
-  range:"money!A:C",
-  valueInputOption:"USER_ENTERED",
-
-  resource:{
-   values:[
-    [
-     new Date().toLocaleString(),
-     text,
-     price[0]
-    ]
-   ]
+  if (text.startsWith("完了")) {
+    return completeTask(event, text);
   }
 
- })
+  if (text.startsWith("修正")) {
+    return modifyEvent(event, text);
+  }
 
+  return createEvent(event, text);
 }
 
+async function createEvent(event, text) {
 
+  const parsed = chrono.parse(text);
 
-// ================================
-// TASK
-// ================================
-
-async function addTask(text){
-
- await sheets.spreadsheets.values.append({
-
-  spreadsheetId:SHEET_ID,
-  range:"task!A:C",
-  valueInputOption:"USER_ENTERED",
-
-  resource:{
-   values:[
-    [
-     new Date().toLocaleString(),
-     text,
-     "未完了"
-    ]
-   ]
+  if (parsed.length === 0) {
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "日時を認識できません"
+    });
   }
 
- })
+  const start = parsed[0].start.date();
 
+  const end = new Date(start.getTime() + 60 * 60 * 1000);
+
+  const title = text.replace(parsed[0].text, "").trim() || "予定";
+
+  const calendarEvent = {
+    summary: title,
+    start: {
+      dateTime: start.toISOString(),
+      timeZone: "Asia/Tokyo"
+    },
+    end: {
+      dateTime: end.toISOString(),
+      timeZone: "Asia/Tokyo"
+    },
+    reminders: {
+      useDefault: false,
+      overrides: [
+        { method: "popup", minutes: 30 }
+      ]
+    }
+  };
+
+  await calendar.events.insert({
+    calendarId: CALENDAR_ID,
+    resource: calendarEvent
+  });
+
+  return client.replyMessage(event.replyToken, {
+    type: "text",
+    text: `予定登録\n${title}\n${start}`
+  });
 }
 
+async function completeTask(event, text) {
 
+  const keyword = text.replace("完了", "").trim();
 
-// ================================
-// SCHEDULE PARSER
-// ================================
+  const list = await calendar.events.list({
+    calendarId: CALENDAR_ID,
+    maxResults: 20,
+    singleEvents: true,
+    orderBy: "startTime"
+  });
 
-function parseSchedule(text){
+  const target = list.data.items.find(e =>
+    e.summary.includes(keyword)
+  );
 
- let title = text
- let date = new Date()
+  if (!target) {
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "該当予定なし"
+    });
+  }
 
- // 明日
- if(text.includes("明日")){
-  date.setDate(date.getDate()+1)
- }
+  await calendar.events.delete({
+    calendarId: CALENDAR_ID,
+    eventId: target.id
+  });
 
- // 今日
- if(text.includes("今日")){
- }
-
- // 時刻
- const timeMatch = text.match(/([0-9]{1,2})時/)
-
- let hour = 9
-
- if(timeMatch){
-  hour = parseInt(timeMatch[1])
- }
-
- date.setHours(hour)
- date.setMinutes(0)
-
- return {
-  title:title,
-  date:date.toLocaleString()
- }
-
+  return client.replyMessage(event.replyToken, {
+    type: "text",
+    text: "タスク完了"
+  });
 }
 
+async function modifyEvent(event, text) {
 
+  const body = text.replace("修正", "").trim();
 
-// ================================
-// ADD SCHEDULE
-// ================================
+  const parsed = chrono.parse(body);
 
-async function addSchedule(text){
-
- const schedule = parseSchedule(text)
-
- await sheets.spreadsheets.values.append({
-
-  spreadsheetId:SHEET_ID,
-  range:"task!A:C",
-  valueInputOption:"USER_ENTERED",
-
-  resource:{
-   values:[
-    [
-     schedule.date,
-     schedule.title,
-     "予定"
-    ]
-   ]
+  if (parsed.length === 0) {
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "修正日時を認識できません"
+    });
   }
 
- })
+  const newDate = parsed[0].start.date();
 
+  const keyword = body.replace(parsed[0].text, "").trim();
+
+  const list = await calendar.events.list({
+    calendarId: CALENDAR_ID,
+    maxResults: 20,
+    singleEvents: true,
+    orderBy: "startTime"
+  });
+
+  const target = list.data.items.find(e =>
+    e.summary.includes(keyword)
+  );
+
+  if (!target) {
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "修正対象が見つかりません"
+    });
+  }
+
+  await calendar.events.patch({
+    calendarId: CALENDAR_ID,
+    eventId: target.id,
+    resource: {
+      start: {
+        dateTime: newDate.toISOString(),
+        timeZone: "Asia/Tokyo"
+      },
+      end: {
+        dateTime: new Date(newDate.getTime() + 60 * 60 * 1000).toISOString(),
+        timeZone: "Asia/Tokyo"
+      }
+    }
+  });
+
+  return client.replyMessage(event.replyToken, {
+    type: "text",
+    text: "予定修正しました"
+  });
 }
 
-
-
-// ================================
-// MESSAGE
-// ================================
-
-async function handleMessage(event){
-
- const text = event.message.text
-
- let reply=""
-
- try{
-
-  if(text.includes("円")){
-
-   await addMoney(text)
-
-   reply="家計簿に登録しました"
-
-  }
-
-  else if(text.startsWith("タスク")){
-
-   await addTask(text.replace("タスク",""))
-
-   reply="タスク登録しました"
-
-  }
-
-  else if(
-   text.includes("明日") ||
-   text.includes("今日") ||
-   text.match(/[0-9]+時/)
-  ){
-
-   await addSchedule(text)
-
-   reply="予定登録しました"
-
-  }
-
-  else{
-
-   reply = await askAI(text)
-
-  }
-
- }
-
- catch(e){
-
-  console.log(e)
-
-  reply="エラーが発生しました"
-
- }
-
- return client.replyMessage(event.replyToken,{
-  type:"text",
-  text:reply
- })
-
-}
-
-
-
-// ================================
-// WEBHOOK
-// ================================
-
-app.post("/webhook",line.middleware(lineConfig),(req,res)=>{
-
- Promise
- .all(req.body.events.map(handleMessage))
- .then(result=>res.json(result))
- .catch(err=>{
-  console.error(err)
-  res.status(500).end()
- })
-
-})
-
-
-
-// ================================
-// ROOT
-// ================================
-
-app.get("/",(req,res)=>{
-
- res.send("MUTA-E AI SECRETARY RUNNING")
-
-})
-
-
-
-// ================================
-// SERVER
-// ================================
-
-app.listen(PORT,()=>{
-
- console.log("AI SECRETARY STARTED")
-
-})
+app.listen(process.env.PORT || 3000, () => {
+  console.log("server running");
+});
