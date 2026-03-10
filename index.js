@@ -56,7 +56,7 @@ async function handleEvent(event) {
 
 async function createEvent(event, text) {
 
-  const parsed = chrono.parse(text);
+  const parsed = chrono.ja.parse(text);
 
   if (parsed.length === 0) {
     return client.replyMessage(event.replyToken, {
@@ -137,7 +137,7 @@ async function modifyEvent(event, text) {
 
   const body = text.replace("修正", "").trim();
 
-  const parsed = chrono.parse(body);
+  const parsed = chrono.ja.parse(body);
 
   if (parsed.length === 0) {
     return client.replyMessage(event.replyToken, {
