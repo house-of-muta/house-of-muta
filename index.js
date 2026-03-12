@@ -3,7 +3,6 @@ const line = require("@line/bot-sdk");
 const chrono = require("chrono-node");
 const { google } = require("googleapis");
 const cron = require("node-cron");
-const OpenAI = require("openai");
 
 const app = express();
 
@@ -13,10 +12,6 @@ const config = {
 };
 
 const client = new line.Client(config);
-
-const openai = new OpenAI({
- apiKey: process.env.OPENAI_API_KEY
-});
 
 const auth = new google.auth.GoogleAuth({
  keyFile: "credentials.json",
@@ -53,8 +48,6 @@ async function handleEvent(event) {
  if (text.startsWith("タスク")) return addTask(event, text);
  if (text.startsWith("完了")) return completeTask(event, text);
 
- if (text.startsWith("相談")) return askGPT(event, text);
-
  return createEvent(event, text);
 }
 
@@ -70,7 +63,7 @@ async function createEvent(event, text){
  }
 
  const start=parsed[0].start.date();
- const end=new Date(start.getTime()+60*60*1000);
+ const end=new Date(start.getTime()+3600000);
 
  const title=text.replace(parsed[0].text,"").trim()||"予定";
 
@@ -79,14 +72,22 @@ async function createEvent(event, text){
   resource:{
    summary:title,
    start:{dateTime:start.toISOString(),timeZone:"Asia/Tokyo"},
-   end:{dateTime:end.toISOString(),timeZone:"Asia/Tokyo"}
+   end:{dateTime:end.toISOString(),timeZone:"Asia/Tokyo"},
+   reminders:{
+    useDefault:false,
+    overrides:[{method:"popup",minutes:30}]
+   }
   }
  });
 
  return client.replyMessage(event.replyToken,{
   type:"text",
-  text:`予定登録しました
-${start.getHours()}時 ${title}`
+  text:`予定かしこまりました
+
+${start.getHours()}時${start.getMinutes()}分
+「${title}」
+
+前日17:00と30分前に通知します`
  });
 }
 
@@ -156,7 +157,7 @@ async function modifyEvent(event,text){
  const target=list.data.items.find(e=>e.summary.includes(keyword));
 
  if(!target){
-  return client.replyMessage(event.replyToken,{type:"text",text:"対象なし"});
+  return client.replyMessage(event.replyToken,{type:"text",text:"修正対象なし"});
  }
 
  await calendar.events.patch({
@@ -184,7 +185,7 @@ async function addTask(event,text){
   }
  });
 
- return client.replyMessage(event.replyToken,{type:"text",text:"タスク登録"});
+ return client.replyMessage(event.replyToken,{type:"text",text:"タスク登録しました"});
 }
 
 async function completeTask(event,text){
@@ -211,21 +212,6 @@ async function completeTask(event,text){
  return client.replyMessage(event.replyToken,{type:"text",text:"タスク完了"});
 }
 
-async function askGPT(event,text){
-
- const q=text.replace("相談","");
-
- const r=await openai.chat.completions.create({
-  model:"gpt-4o-mini",
-  messages:[{role:"user",content:q}]
- });
-
- return client.replyMessage(event.replyToken,{
-  type:"text",
-  text:r.choices[0].message.content
- });
-}
-
 async function getTodayEvents(){
 
  const now=new Date();
@@ -241,7 +227,7 @@ async function getTodayEvents(){
   orderBy:"startTime"
  });
 
- if(res.data.items.length===0) return "今日の予定なし";
+ if(res.data.items.length===0) return "今日の予定はありません";
 
  let msg="今日の予定\n\n";
 
@@ -274,7 +260,7 @@ async function sendTomorrow(event){
  });
 
  if(res.data.items.length===0){
-  return client.replyMessage(event.replyToken,{type:"text",text:"明日の予定なし"});
+  return client.replyMessage(event.replyToken,{type:"text",text:"明日の予定はありません"});
  }
 
  let msg="明日の予定\n\n";
@@ -290,6 +276,11 @@ async function sendTomorrow(event){
 cron.schedule("0 8 * * *",async()=>{
  const msg=await getTodayEvents();
  client.pushMessage(USER_ID,{type:"text",text:msg});
+});
+
+cron.schedule("0 17 * * *",async()=>{
+ const msg=await getTodayEvents();
+ client.pushMessage(USER_ID,{type:"text",text:`明日の予定確認\n\n${msg}`});
 });
 
 app.get("/",(req,res)=>{
