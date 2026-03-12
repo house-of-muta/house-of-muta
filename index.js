@@ -32,28 +32,27 @@ app.post("/webhook", line.middleware(config), async (req, res) => {
 
 async function handleEvent(event) {
 
-  if (event.type !== "message") return;
-
-  if (event.message.type !== "text") {
-    return client.replyMessage(event.replyToken, {
-      type: "text",
-      text: "テキストのみ対応"
-    });
-  }
-
   const text = event.message.text;
 
-  if (text.startsWith("完了")) {
-    return completeTask(event, text);
+  if (text.includes("今日の予定")) {
+    return getEvents(event, 0);
   }
 
-  if (text.startsWith("修正")) {
-    return modifyEvent(event, text);
+  if (text.includes("明日の予定")) {
+    return getEvents(event, 1);
+  }
+
+  if (text.includes("予定一覧")) {
+    return listEvents(event);
+  }
+
+  if (text.startsWith("削除")) {
+    return deleteEvent(event, text);
   }
 
   return createEvent(event, text);
-}
 
+}
 async function createEvent(event, text) {
 
   const parsed = chrono.ja.parse(text);
@@ -64,7 +63,64 @@ async function createEvent(event, text) {
       text: "日時を認識できません"
     });
   }
+async function getEvents(event, addDay){
 
+  const date = new Date();
+  date.setDate(date.getDate()+addDay);
+
+  const start = new Date(date.setHours(0,0,0));
+  const end = new Date(date.setHours(23,59,59));
+
+  const res = await calendar.events.list({
+    calendarId: CALENDAR_ID,
+    timeMin: start.toISOString(),
+    timeMax: end.toISOString(),
+    singleEvents:true,
+    orderBy:"startTime"
+  });
+
+  if(res.data.items.length ===0){
+    return client.replyMessage(event.replyToken,{
+      type:"text",
+      text:"予定はありません"
+    });
+  }
+
+  let msg="予定はこちらです\n\n";
+
+  res.data.items.forEach(e=>{
+    const d=new Date(e.start.dateTime);
+    msg+=`${d.getHours()}時 ${e.summary}\n`;
+  });
+
+  return client.replyMessage(event.replyToken,{
+    type:"text",
+    text:msg
+  });
+
+}
+async function listEvents(event){
+
+  const res = await calendar.events.list({
+    calendarId: CALENDAR_ID,
+    maxResults:10,
+    singleEvents:true,
+    orderBy:"startTime"
+  });
+
+  let msg="今後の予定\n\n";
+
+  res.data.items.forEach((e,i)=>{
+    const d=new Date(e.start.dateTime);
+    msg+=`${i+1}. ${d.getMonth()+1}/${d.getDate()} ${d.getHours()}時 ${e.summary}\n`;
+  });
+
+  return client.replyMessage(event.replyToken,{
+    type:"text",
+    text:msg
+  });
+
+}
   const start = parsed[0].start.date();
 
   const end = new Date(start.getTime() + 60 * 60 * 1000);
@@ -88,7 +144,37 @@ async function createEvent(event, text) {
       ]
     }
   };
+async function deleteEvent(event,text){
 
+  const num = Number(text.replace("削除","").trim())-1;
+
+  const res = await calendar.events.list({
+    calendarId:CALENDAR_ID,
+    maxResults:10,
+    singleEvents:true,
+    orderBy:"startTime"
+  });
+
+  const target = res.data.items[num];
+
+  if(!target){
+    return client.replyMessage(event.replyToken,{
+      type:"text",
+      text:"番号が見つかりません"
+    });
+  }
+
+  await calendar.events.delete({
+    calendarId:CALENDAR_ID,
+    eventId:target.id
+  });
+
+  return client.replyMessage(event.replyToken,{
+    type:"text",
+    text:"予定を削除しました"
+  });
+
+}
   await calendar.events.insert({
     calendarId: CALENDAR_ID,
     resource: calendarEvent
