@@ -32,33 +32,43 @@ app.post("/webhook", line.middleware(config), async (req, res) => {
   });
 });
 
-async function handleEvent(event) {
+async function handleEvent(event){
 
- if (event.type !== "message" || event.message.type !== "text") return;
+ if(event.type!=="message" || event.message.type!=="text") return;
 
- const text = event.message.text;
+ const text=event.message.text;
 
- if (text === "今日の予定") return sendToday(event);
- if (text === "明日の予定") return sendTomorrow(event);
- if (text === "予定一覧") return listEvents(event);
+ // 自然言語解析
+ if(isToday(text)) return sendToday(event);
+ if(isTomorrow(text)) return sendTomorrow(event);
+ if(isList(text)) return listEvents(event);
 
- if (text.startsWith("削除")) return deleteEvent(event, text);
- if (text.startsWith("修正")) return modifyEvent(event, text);
+ if(text.startsWith("削除")) return deleteEvent(event,text);
+ if(text.startsWith("修正")) return modifyEvent(event,text);
 
- if (text.startsWith("タスク")) return addTask(event, text);
- if (text.startsWith("完了")) return completeTask(event, text);
-
- return createEvent(event, text);
+ return createEvent(event,text);
 }
 
-async function createEvent(event, text){
+function isToday(text){
+ return /(今日|本日)/.test(text);
+}
 
- const parsed = chrono.ja.parse(text);
+function isTomorrow(text){
+ return /(明日)/.test(text);
+}
+
+function isList(text){
+ return /(予定一覧|スケジュール|予定見せ|予定教え)/.test(text);
+}
+
+async function createEvent(event,text){
+
+ const parsed=chrono.ja.parse(text);
 
  if(parsed.length===0){
   return client.replyMessage(event.replyToken,{
    type:"text",
-   text:"日時を認識できません"
+   text:"MUTA-Eです。\n日時を認識できませんでした。"
   });
  }
 
@@ -82,12 +92,14 @@ async function createEvent(event, text){
 
  return client.replyMessage(event.replyToken,{
   type:"text",
-  text:`予定かしこまりました
+  text:`MUTA-Eです。
 
+予定を登録しました
+
+${start.getMonth()+1}/${start.getDate()}
 ${start.getHours()}時${start.getMinutes()}分
-「${title}」
 
-前日17:00と30分前に通知します`
+「${title}」`
  });
 }
 
@@ -100,7 +112,14 @@ async function listEvents(event){
   orderBy:"startTime"
  });
 
- let msg="今後の予定\n\n";
+ if(res.data.items.length===0){
+  return client.replyMessage(event.replyToken,{
+   type:"text",
+   text:"予定はありません"
+  });
+ }
+
+ let msg="予定一覧\n\n";
 
  res.data.items.forEach((e,i)=>{
   const d=new Date(e.start.dateTime);
@@ -132,7 +151,10 @@ async function deleteEvent(event,text){
   eventId:target.id
  });
 
- return client.replyMessage(event.replyToken,{type:"text",text:"予定削除しました"});
+ return client.replyMessage(event.replyToken,{
+  type:"text",
+  text:"予定削除しました"
+ });
 }
 
 async function modifyEvent(event,text){
@@ -141,7 +163,10 @@ async function modifyEvent(event,text){
  const parsed=chrono.ja.parse(body);
 
  if(parsed.length===0){
-  return client.replyMessage(event.replyToken,{type:"text",text:"修正日時を認識できません"});
+  return client.replyMessage(event.replyToken,{
+   type:"text",
+   text:"修正日時を認識できません"
+  });
  }
 
  const newDate=parsed[0].start.date();
@@ -150,14 +175,13 @@ async function modifyEvent(event,text){
  const list=await calendar.events.list({
   calendarId:CALENDAR_ID,
   maxResults:20,
-  singleEvents:true,
-  orderBy:"startTime"
+  singleEvents:true
  });
 
  const target=list.data.items.find(e=>e.summary.includes(keyword));
 
  if(!target){
-  return client.replyMessage(event.replyToken,{type:"text",text:"修正対象なし"});
+  return client.replyMessage(event.replyToken,{type:"text",text:"対象予定なし"});
  }
 
  await calendar.events.patch({
@@ -169,47 +193,10 @@ async function modifyEvent(event,text){
   }
  });
 
- return client.replyMessage(event.replyToken,{type:"text",text:"予定修正しました"});
-}
-
-async function addTask(event,text){
-
- const title=text.replace("タスク","").trim();
-
- await calendar.events.insert({
-  calendarId:CALENDAR_ID,
-  resource:{
-   summary:`タスク:${title}`,
-   start:{date:new Date().toISOString().split("T")[0]},
-   end:{date:new Date().toISOString().split("T")[0]}
-  }
+ return client.replyMessage(event.replyToken,{
+  type:"text",
+  text:"予定を修正しました"
  });
-
- return client.replyMessage(event.replyToken,{type:"text",text:"タスク登録しました"});
-}
-
-async function completeTask(event,text){
-
- const keyword=text.replace("完了","").trim();
-
- const list=await calendar.events.list({
-  calendarId:CALENDAR_ID,
-  maxResults:20,
-  singleEvents:true
- });
-
- const target=list.data.items.find(e=>e.summary.includes(keyword));
-
- if(!target){
-  return client.replyMessage(event.replyToken,{type:"text",text:"タスクなし"});
- }
-
- await calendar.events.delete({
-  calendarId:CALENDAR_ID,
-  eventId:target.id
- });
-
- return client.replyMessage(event.replyToken,{type:"text",text:"タスク完了"});
 }
 
 async function getTodayEvents(){
@@ -223,8 +210,7 @@ async function getTodayEvents(){
   calendarId:CALENDAR_ID,
   timeMin:start.toISOString(),
   timeMax:end.toISOString(),
-  singleEvents:true,
-  orderBy:"startTime"
+  singleEvents:true
  });
 
  if(res.data.items.length===0) return "今日の予定はありません";
@@ -260,7 +246,10 @@ async function sendTomorrow(event){
  });
 
  if(res.data.items.length===0){
-  return client.replyMessage(event.replyToken,{type:"text",text:"明日の予定はありません"});
+  return client.replyMessage(event.replyToken,{
+   type:"text",
+   text:"明日の予定はありません"
+  });
  }
 
  let msg="明日の予定\n\n";
@@ -278,15 +267,6 @@ cron.schedule("0 8 * * *",async()=>{
  client.pushMessage(USER_ID,{type:"text",text:msg});
 });
 
-cron.schedule("0 17 * * *",async()=>{
- const msg=await getTodayEvents();
- client.pushMessage(USER_ID,{type:"text",text:`明日の予定確認\n\n${msg}`});
-});
-
-app.get("/",(req,res)=>{
- res.send("bot running");
-});
-
 app.listen(process.env.PORT||3000,()=>{
- console.log("server running");
+ console.log("MUTA-E running");
 });
