@@ -94,10 +94,24 @@ async function createEvent(event, text) {
     resource: calendarEvent
   });
 
-  return client.replyMessage(event.replyToken, {
-    type: "text",
-    text: `予定登録\n${title}\n${start}`
-  });
+const start = new Date(date);
+const hour = start.getHours().toString().padStart(2, '0');
+const min = start.getMinutes().toString().padStart(2, '0');
+
+return client.replyMessage(event.replyToken, {
+  type: 'text',
+  text:
+`予定かしこまりました。
+
+${hour}時${min}分
+「${title}」ですね。
+
+予定時間の確認を
+・前日17:00
+・予定30分前
+
+に通知します。`
+});
 }
 
 async function completeTask(event, text) {
