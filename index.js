@@ -1,12 +1,13 @@
 const express=require("express")
 const line=require("@line/bot-sdk")
 
-const calendar=require("./calendar")
 const ai=require("./ai")
+const calendar=require("./calendar")
 const finance=require("./finance")
 const news=require("./news")
 const trip=require("./trip")
 const notify=require("./notify")
+const meeting=require("./meeting")
 
 const app=express()
 
@@ -18,7 +19,7 @@ channelSecret:process.env.LINE_CHANNEL_SECRET
 const client=new line.Client(config)
 
 app.post("/webhook",line.middleware(config),(req,res)=>{
-Promise.all(req.body.events.map(handleEvent))
+Promise.all(req.body.events.map(event=>handleEvent(event)))
 .then(()=>res.end())
 .catch(()=>res.status(500).end())
 })
@@ -31,26 +32,30 @@ if(event.message.type==="text"){
 
 const text=event.message.text
 
-if(text==="今日")return calendar.today(event)
+if(text==="今日")return calendar.today(client,event)
 
-if(text==="明日")return calendar.tomorrow(event)
+if(text==="明日")return calendar.tomorrow(client,event)
 
-if(text==="来週")return calendar.nextWeek(event)
+if(text==="来週")return calendar.week(client,event)
 
-if(text==="空き")return calendar.free(event)
+if(text==="空き")return calendar.free(client,event)
 
-if(text.startsWith("削除"))return calendar.delete(event,text)
+if(text.startsWith("削除"))return calendar.remove(client,event,text)
 
-if(text.includes("出張"))return trip.create(event,text)
+if(text.includes("出張"))return trip.create(client,event,text)
 
-if(text==="株価")return finance.stock(event)
+if(text==="株価")return finance.stock(client,event)
 
-if(text==="ニュース")return news.latest(event)
+if(text==="ニュース")return news.latest(client,event)
 
-if(text==="通知")return notify.status(event)
+if(text==="通知")return notify.status(client,event)
 
-return ai.smartSchedule(event,text)
+return ai.schedule(client,event,text)
 
+}
+
+if(event.message.type==="audio"){
+return meeting.minutes(client,event)
 }
 
 }
