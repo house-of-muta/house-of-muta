@@ -1,28 +1,28 @@
-const OpenAI = require("openai")
+const OpenAI=require("openai")
 
-const openai = new OpenAI({
+const openai=new OpenAI({
 apiKey:process.env.OPENAI_API_KEY
 })
 
-exports.chat = async(text)=>{
+async function smartSchedule(event,text){
 
-const completion = await openai.chat.completions.create({
-
+const res=await openai.chat.completions.create({
 model:"gpt-4o-mini",
-
 messages:[
 {
 role:"system",
-content:"あなたは優秀なAI秘書です。"
+content:"予定タイトルと日時をJSONで出力"
 },
 {
 role:"user",
 content:text
 }
 ]
-
 })
 
-return completion.choices[0].message.content
+return res.choices[0].message.content
+}
 
+module.exports={
+smartSchedule
 }
