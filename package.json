@@ -1,18 +1,13 @@
 {
-  "name": "muta-ai-secretary",
-  "version": "2.0.0",
-  "description": "MUTA-E AI Secretary",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "dependencies": {
-    "@line/bot-sdk": "^7.7.0",
-    "chrono-node": "^2.7.6",
-    "express": "^4.18.2",
-    "googleapis": "^128.0.0",
-    "node-cron": "^3.0.3"
-    "openai":"^4.0.0",
-　　"axios":"^1.6.0"
-  }
+"name":"muta-e",
+"version":"6.0.0",
+"dependencies":{
+"@line/bot-sdk":"^7.7.0",
+"express":"^4.18.2",
+"googleapis":"^128.0.0",
+"chrono-node":"^2.7.6",
+"node-cron":"^3.0.3",
+"axios":"^1.6.0",
+"openai":"^4.0.0"
+}
 }
