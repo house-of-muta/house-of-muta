@@ -1,59 +1,79 @@
-const { google } = require("googleapis")
-const chrono = require("chrono-node")
+const {google}=require("googleapis")
 
-const auth = new google.auth.OAuth2(
-process.env.GOOGLE_CLIENT_ID,
-process.env.GOOGLE_CLIENT_SECRET
-)
-
-auth.setCredentials({
-refresh_token:process.env.GOOGLE_REFRESH_TOKEN
+const auth=new google.auth.GoogleAuth({
+keyFile:"credentials.json",
+scopes:["https://www.googleapis.com/auth/calendar"]
 })
 
-const calendar = google.calendar({
-version:"v3",
-auth
-})
+const calendar=google.calendar({version:"v3",auth})
 
-exports.add = async (text) => {
+const CALENDAR_ID=process.env.CALENDAR_ID
 
-const result = chrono.parse(text)
+async function create(client,event,title,datetime){
 
-if(result.length === 0) return "日時を認識できません"
-
-const start = result[0].start.date()
-
-const end = new Date(start.getTime()+3600000)
-
-const event = {
-
-summary:text,
-
-start:{
-dateTime:start.toISOString(),
-timeZone:"Asia/Tokyo"
-},
-
-end:{
-dateTime:end.toISOString(),
-timeZone:"Asia/Tokyo"
-}
-
-}
+const start=new Date(datetime)
 
 await calendar.events.insert({
-
-calendarId:"primary",
-resource:event
-
+calendarId:CALENDAR_ID,
+resource:{
+summary:title,
+start:{dateTime:start.toISOString(),timeZone:"Asia/Tokyo"},
+end:{dateTime:new Date(start.getTime()+3600000).toISOString(),timeZone:"Asia/Tokyo"}
+}
 })
 
-return "予定を登録しました"
+return client.replyMessage(event.replyToken,{
+type:"text",
+text:`予定登録\n${title}`
+})
 
 }
 
-exports.delete = async () => {
+async function today(client,event){
 
-return "削除機能は開発中"
+const now=new Date()
+
+const res=await calendar.events.list({
+calendarId:CALENDAR_ID,
+timeMin:new Date(now.setHours(0,0,0)).toISOString(),
+timeMax:new Date(now.setHours(23,59,59)).toISOString(),
+singleEvents:true
+})
+
+let msg="今日の予定\n"
+
+res.data.items.forEach(e=>{
+const d=new Date(e.start.dateTime)
+msg+=`${d.getHours()}時 ${e.summary}\n`
+})
+
+return client.replyMessage(event.replyToken,{type:"text",text:msg})
 
 }
+
+async function week(client,event){
+
+const now=new Date()
+
+const end=new Date()
+end.setDate(now.getDate()+7)
+
+const res=await calendar.events.list({
+calendarId:CALENDAR_ID,
+timeMin:now.toISOString(),
+timeMax:end.toISOString(),
+singleEvents:true
+})
+
+let msg="来週予定\n"
+
+res.data.items.forEach(e=>{
+const d=new Date(e.start.dateTime)
+msg+=`${d.getMonth()+1}/${d.getDate()} ${d.getHours()}時 ${e.summary}\n`
+})
+
+return client.replyMessage(event.replyToken,{type:"text",text:msg})
+
+}
+
+module.exports={create,today,week}
