@@ -6,105 +6,160 @@ const auth = new google.auth.GoogleAuth({
 })
 
 const cal = google.calendar({ version: "v3", auth })
-const CALENDAR_ID = process.env.CALENDAR_ID
+const CALENDAR_ID = "primary"
 
-const TZ = "Asia/Tokyo"
-
-async function create(title, date) {
-
-  await cal.events.insert({
-    calendarId: CALENDAR_ID,
-    resource: {
-      summary: title,
-      start: {
-        dateTime: date.toISOString(),
-        timeZone: TZ
-      },
-      end: {
-        dateTime: new Date(date.getTime() + 60 * 60 * 1000).toISOString(),
-        timeZone: TZ
-      }
-    }
-  })
-}
-
-async function today(client, event) {
-
-  const now = new Date()
-
-  const res = await cal.events.list({
-    calendarId: CALENDAR_ID,
-    timeMin: new Date(now.setHours(0, 0, 0)).toISOString(),
-    timeMax: new Date(now.setHours(23, 59, 59)).toISOString(),
-    singleEvents: true,
-    orderBy: "startTime"
-  })
-
-  let msg = "今日の予定\n"
-
-  res.data.items.forEach((e, i) => {
-    msg += `${i + 1}. ${e.summary}\n`
-  })
-
-  return client.replyMessage(event.replyToken, {
-    type: "text",
-    text: msg
-  })
-}
-
+// 予定一覧
 async function list(client, event) {
+  try {
+    const now = new Date()
 
-  const now = new Date()
+    const res = await cal.events.list({
+      calendarId: CALENDAR_ID,
+      timeMin: now.toISOString(),
+      maxResults: 10,
+      singleEvents: true,
+      orderBy: "startTime"
+    })
 
-  const res = await cal.events.list({
-    calendarId: CALENDAR_ID,
-    timeMin: now.toISOString(),
-    maxResults: 10,
-    singleEvents: true,
-    orderBy: "startTime"
-  })
+    if (!res.data.items.length) {
+      return client.replyMessage(event.replyToken, {
+        type: "text",
+        text: "予定はありません"
+      })
+    }
 
-  let msg = "予定一覧\n"
+    let msg = "予定一覧\n"
+    global.eventCache = res.data.items
 
-  res.data.items.forEach((e, i) => {
-    msg += `${i + 1}. ${e.summary}\n`
-  })
+    res.data.items.forEach((e, i) => {
+      const time = e.start.dateTime
+        ? new Date(e.start.dateTime).toLocaleString("ja-JP", {
+            hour: "2-digit",
+            minute: "2-digit"
+          })
+        : "終日"
 
-  return client.replyMessage(event.replyToken, {
-    type: "text",
-    text: msg
-  })
-}
+      msg += `${i + 1}. ${time} ${e.summary}\n`
+    })
 
-async function remove(client, event, text) {
-
-  const num = parseInt(text.replace("削除", ""))
-
-  const res = await cal.events.list({
-    calendarId: CALENDAR_ID,
-    maxResults: 10,
-    singleEvents: true,
-    orderBy: "startTime"
-  })
-
-  const target = res.data.items[num - 1]
-
-  if (!target) {
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: "該当なし"
+      text: msg
+    })
+  } catch (e) {
+    console.error(e)
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "予定取得エラー"
     })
   }
-
-  await cal.events.delete({
-    calendarId: CALENDAR_ID,
-    eventId: target.id
-  })
-
-  return client.replyMessage(event.replyToken, {
-    type: "text",
-    text: `削除完了：${target.summary}`
-  })
 }
 
-module.exports = { create, today, list, remove }
+// 今日
+async function today(client, event) {
+  try {
+    const start = new Date()
+    start.setHours(0,0,0,0)
+
+    const end = new Date()
+    end.setHours(23,59,59,999)
+
+    const res = await cal.events.list({
+      calendarId: CALENDAR_ID,
+      timeMin: start.toISOString(),
+      timeMax: end.toISOString(),
+      singleEvents: true,
+      orderBy: "startTime"
+    })
+
+    if (!res.data.items.length) {
+      return client.replyMessage(event.replyToken, {
+        type: "text",
+        text: "今日は予定なし"
+      })
+    }
+
+    let msg = "今日の予定\n"
+
+    res.data.items.forEach((e, i) => {
+      const time = e.start.dateTime
+        ? new Date(e.start.dateTime).toLocaleTimeString("ja-JP", {
+            hour: "2-digit",
+            minute: "2-digit"
+          })
+        : "終日"
+
+      msg += `${i + 1}. ${time} ${e.summary}\n`
+    })
+
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: msg
+    })
+  } catch (e) {
+    console.error(e)
+  }
+}
+
+// 追加
+async function add(client, event, text) {
+  try {
+    // 例: 予定追加 2026-03-20 12:00 会議
+    const parts = text.split(" ")
+    const date = parts[1]
+    const time = parts[2]
+    const title = parts.slice(3).join(" ")
+
+    const start = new Date(`${date}T${time}:00+09:00`)
+    const end = new Date(start.getTime() + 60 * 60 * 1000)
+
+    await cal.events.insert({
+      calendarId: CALENDAR_ID,
+      requestBody: {
+        summary: title,
+        start: { dateTime: start.toISOString() },
+        end: { dateTime: end.toISOString() }
+      }
+    })
+
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "予定登録しました"
+    })
+  } catch (e) {
+    console.error(e)
+  }
+}
+
+// 削除（複数OK）
+async function remove(client, event, text) {
+  try {
+    const nums = text.replace("削除", "").trim().split(" ").map(n => parseInt(n))
+
+    if (!global.eventCache) {
+      return client.replyMessage(event.replyToken, {
+        type: "text",
+        text: "先に予定一覧を表示してください"
+      })
+    }
+
+    for (let n of nums) {
+      const target = global.eventCache[n - 1]
+      if (target) {
+        await cal.events.delete({
+          calendarId: CALENDAR_ID,
+          eventId: target.id
+        })
+      }
+    }
+
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "削除しました"
+    })
+  } catch (e) {
+    console.error(e)
+  }
+}
+
+module.exports = { list, today, add, remove }
