@@ -5,75 +5,86 @@ keyFile:"credentials.json",
 scopes:["https://www.googleapis.com/auth/calendar"]
 })
 
-const calendar=google.calendar({version:"v3",auth})
-
+const cal=google.calendar({version:"v3",auth})
 const CALENDAR_ID=process.env.CALENDAR_ID
 
-async function create(client,event,title,datetime){
+async function create(title,date){
 
-const start=new Date(datetime)
-
-await calendar.events.insert({
+await cal.events.insert({
 calendarId:CALENDAR_ID,
 resource:{
 summary:title,
-start:{dateTime:start.toISOString(),timeZone:"Asia/Tokyo"},
-end:{dateTime:new Date(start.getTime()+3600000).toISOString(),timeZone:"Asia/Tokyo"}
+start:{dateTime:new Date().toISOString()},
+end:{dateTime:new Date(Date.now()+3600000).toISOString()}
 }
 })
-
-return client.replyMessage(event.replyToken,{
-type:"text",
-text:`予定登録\n${title}`
-})
-
 }
 
 async function today(client,event){
 
 const now=new Date()
 
-const res=await calendar.events.list({
+const res=await cal.events.list({
 calendarId:CALENDAR_ID,
 timeMin:new Date(now.setHours(0,0,0)).toISOString(),
 timeMax:new Date(now.setHours(23,59,59)).toISOString(),
-singleEvents:true
+singleEvents:true,
+orderBy:"startTime"
 })
 
 let msg="今日の予定\n"
-
-res.data.items.forEach(e=>{
-const d=new Date(e.start.dateTime)
-msg+=`${d.getHours()}時 ${e.summary}\n`
+res.data.items.forEach((e,i)=>{
+msg+=`${i+1}. ${e.summary}\n`
 })
 
 return client.replyMessage(event.replyToken,{type:"text",text:msg})
-
 }
 
-async function week(client,event){
+async function list(client,event){
 
 const now=new Date()
 
-const end=new Date()
-end.setDate(now.getDate()+7)
-
-const res=await calendar.events.list({
+const res=await cal.events.list({
 calendarId:CALENDAR_ID,
 timeMin:now.toISOString(),
-timeMax:end.toISOString(),
-singleEvents:true
+maxResults:10,
+singleEvents:true,
+orderBy:"startTime"
 })
 
-let msg="来週予定\n"
-
-res.data.items.forEach(e=>{
-const d=new Date(e.start.dateTime)
-msg+=`${d.getMonth()+1}/${d.getDate()} ${d.getHours()}時 ${e.summary}\n`
+let msg="予定一覧\n"
+res.data.items.forEach((e,i)=>{
+msg+=`${i+1}. ${e.summary}\n`
 })
 
 return client.replyMessage(event.replyToken,{type:"text",text:msg})
+}
+
+async function remove(client,event,text){
+
+const num=parseInt(text.replace("削除",""))
+
+const res=await cal.events.list({
+calendarId:CALENDAR_ID,
+maxResults:10,
+singleEvents:true,
+orderBy:"startTime"
+})
+
+const target=res.data.items[num-1]
+
+if(!target)return client.replyMessage(event.replyToken,{type:"text",text:"該当なし"})
+
+await cal.events.delete({
+calendarId:CALENDAR_ID,
+eventId:target.id
+})
+
+return client.replyMessage(event.replyToken,{
+type:"text",
+text:`削除完了：${target.summary}`
+})
 
 }
 
-module.exports={create,today,week}
+module.exports={today,list,remove,create}
