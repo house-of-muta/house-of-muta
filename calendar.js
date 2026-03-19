@@ -83,7 +83,93 @@ async function list(client, event) {
     })
   }
 }
+// ========================
+// 空き時間検索
+// ========================
+async function freeTime(client, event, text) {
 
+  try {
+
+    let targetDate = new Date()
+
+    if (text.includes("明日")) {
+      targetDate.setDate(targetDate.getDate() + 1)
+    }
+
+    const start = new Date(targetDate)
+    start.setHours(9, 0, 0, 0)
+
+    const end = new Date(targetDate)
+    end.setHours(21, 0, 0, 0)
+
+    const res = await cal.events.list({
+      calendarId: CALENDAR_ID,
+      timeMin: start.toISOString(),
+      timeMax: end.toISOString(),
+      singleEvents: true,
+      orderBy: "startTime"
+    })
+
+    const events = res.data.items
+
+    let freeSlots = []
+    let current = new Date(start)
+
+    for (let e of events) {
+
+      const eventStart = new Date(e.start.dateTime)
+      const eventEnd = new Date(e.end.dateTime)
+
+      if (current < eventStart) {
+        freeSlots.push({
+          start: new Date(current),
+          end: new Date(eventStart)
+        })
+      }
+
+      if (current < eventEnd) {
+        current = new Date(eventEnd)
+      }
+    }
+
+    // 最後の空き
+    if (current < end) {
+      freeSlots.push({
+        start: new Date(current),
+        end: new Date(end)
+      })
+    }
+
+    if (freeSlots.length === 0) {
+      return client.replyMessage(event.replyToken, {
+        type: "text",
+        text: "空き時間はありません"
+      })
+    }
+
+    let msg = "空き時間はこちら\n\n"
+
+    freeSlots.forEach(slot => {
+
+      const s = slot.start.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" })
+      const e = slot.end.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" })
+
+      msg += `${s}〜${e}\n`
+    })
+
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: msg
+    })
+
+  } catch (e) {
+    console.error(e)
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "空き時間取得エラー"
+    })
+  }
+}
 // ========================
 // 今日の予定
 // ========================
