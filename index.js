@@ -36,7 +36,10 @@ async function handleEvent(event) {
   if (text === "今日") {
     return calendar.today(client, event)
   }
-
+// 空き時間
+if (text.includes("空いてる") || text.includes("空き時間")) {
+  return calendar.freeTime(client, event, text)
+}
   // 予定登録
   if (text.startsWith("予定追加")) {
     return calendar.add(client, event, text)
