@@ -1,50 +1,60 @@
-const OpenAI = require("openai")
-const calendar = require("./calendar")
 const chrono = require("chrono-node")
+const calendar = require("./calendar")
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-})
+// 日本語パーサ使用
+const parser = chrono.ja
+
+function cleanText(text) {
+  return text
+    .replace("予定", "")
+    .replace("入れて", "")
+    .replace("登録", "")
+    .trim()
+}
 
 async function chat(client, event, text) {
 
-  // ✅ 時間解析（自然言語）
-  const parsedDate = chrono.parseDate(text, new Date())
+  try {
 
-  if (parsedDate) {
-    try {
-      await calendar.create(text, parsedDate)
+    // 前処理
+    const input = cleanText(text)
+
+    // 日時解析
+    const parsed = parser.parse(input, new Date())
+
+    if (parsed.length > 0) {
+
+      const date = parsed[0].start.date()
+
+      // タイトル抽出（日時部分を除く）
+      const title = input.replace(parsed[0].text, "").trim() || "予定"
+
+      await calendar.create(title, date)
+
+      const hour = date.getHours().toString().padStart(2, "0")
+      const min = date.getMinutes().toString().padStart(2, "0")
 
       return client.replyMessage(event.replyToken, {
         type: "text",
-        text: `予定登録：${text}`
-      })
-    } catch (e) {
-      console.error(e)
-      return client.replyMessage(event.replyToken, {
-        type: "text",
-        text: "予定登録エラー"
+        text:
+`予定かしこまりました。
+
+${hour}時${min}分
+「${title}」ですね。`
       })
     }
-  }
 
-  // ✅ 通常AI
-  try {
-    const res = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [{ role: "user", content: text }]
-    })
-
+    // 認識できない場合
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: res.choices[0].message.content
+      text: "日時が認識できませんでした"
     })
 
   } catch (e) {
     console.error(e)
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: "AI応答エラー"
+      text: "処理エラー"
     })
   }
 }
