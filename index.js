@@ -55,6 +55,5 @@ if (text.includes("空いてる") || text.includes("空き時間")) {
 }
 
 app.listen(process.env.PORT || 3000, () => {
-console.log("SECRET:", process.env.LINE_CHANNEL_SECRET)
   //console.log("server running")
 })
