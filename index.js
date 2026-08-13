@@ -9,8 +9,8 @@ const app = express();
 
 const lineConfig = {
   channelAccessToken:
-    process.env.LINE_CHANNEL_ACCESS_TOKEN || process.env.LINE_ACCESS_TOKEN,
-  channelSecret: process.env.LINE_CHANNEL_SECRET,
+    process.env.LINE_CHANNEL_ACCESS_TOKEN || process.env.LINE_ACCESS_TOKEN || "",
+  channelSecret: process.env.LINE_CHANNEL_SECRET || "",
 };
 
 const client = new line.Client(lineConfig);
@@ -36,7 +36,8 @@ app.get("/health", (_req, res) => {
 
 app.post("/webhook", line.middleware(lineConfig), async (req, res) => {
   try {
-    await Promise.all((req.body.events || []).map(handleEvent));
+    const events = req.body.events || [];
+    await Promise.all(events.map(handleEvent));
     res.status(200).end();
   } catch (error) {
     console.error(error);
@@ -48,11 +49,14 @@ async function handleEvent(event) {
   if (event.type !== "message") return null;
 
   if (event.message.type === "image") {
-    return client.replyMessage(event.replyToken, {
-      type: "text",
-      text:
-        "画像を受信しました。\n次の段階でOCR・AI解析・Excel記帳へ接続します。\ncredentials.jsonは使用しない構成です。",
-    });
+    return reply(
+      event,
+      [
+        "画像を受信しました。",
+        "次の段階でOCR・AI解析・Excel記帳へ接続します。",
+        "credentials.jsonは使用しない構成です。",
+      ].join("\n")
+    );
   }
 
   if (event.message.type === "text") {
@@ -80,6 +84,7 @@ async function handleEvent(event) {
 }
 
 function reply(event, text) {
+  if (!event.replyToken) return null;
   return client.replyMessage(event.replyToken, {
     type: "text",
     text,
@@ -91,5 +96,3 @@ const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`MUTA Farm AI listening on port ${port}`);
 });
-  //console.log("server running")
-})
