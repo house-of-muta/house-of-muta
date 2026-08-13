@@ -5,12 +5,14 @@ const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { pipeline } = require('stream/promises');
 const express = require('express');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const cron = require('node-cron');
 const ExcelJS = require('exceljs');
 const vision = require('@google-cloud/vision');
+const { google } = require('googleapis');
 const OpenAI = require('openai');
 const line = require('@line/bot-sdk');
 
@@ -20,10 +22,12 @@ const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, 'data');
 const EXCEL_DIR = path.join(ROOT, 'excel');
 const UPLOAD_DIR = path.join(ROOT, 'uploads');
-const WORKBOOK_PATH = path.join(EXCEL_DIR, `FarmBook_${EXCEL_YEAR}.xlsx`);
+const WORKBOOK_FILENAME = `FarmBook_${EXCEL_YEAR}.xlsx`;
+const WORKBOOK_PATH = path.join(EXCEL_DIR, WORKBOOK_FILENAME);
 const REGISTRY_PATH = path.join(DATA_DIR, 'registry.json');
 const SESSION_PATH = path.join(DATA_DIR, 'sessions.json');
 const LEARNING_RULES_PATH = path.join(DATA_DIR, 'learningRules.json');
+const DRIVE_STATE_PATH = path.join(DATA_DIR, 'driveWorkbook.json');
 
 const lineConfig = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN || process.env.LINE_ACCESS_TOKEN || '',
@@ -42,32 +46,37 @@ const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
-function createVisionClient() {
+function readGoogleCredentialsFromEnv() {
   const rawCredential =
     process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64
       ? Buffer.from(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64.trim(), 'base64').toString('utf8')
       : process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
 
-  if (rawCredential) {
+  if (!rawCredential) return null;
+
+  let raw = rawCredential.trim();
+  if ((raw.startsWith("'") && raw.endsWith("'")) || (raw.startsWith('"') && raw.endsWith('"'))) {
+    raw = raw.slice(1, -1);
+  }
+
+  let credentials = JSON.parse(raw);
+  if (typeof credentials === 'string') credentials = JSON.parse(credentials);
+
+  if (credentials.private_key) {
+    credentials.private_key = credentials.private_key
+      .replace(/\\n/g, '\n')
+      .replace(/\r\n/g, '\n')
+      .trim();
+    if (!credentials.private_key.endsWith('\n')) credentials.private_key += '\n';
+  }
+
+  return credentials;
+}
+
+function createVisionClient() {
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64 || process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
     try {
-      let raw = rawCredential.trim();
-      if ((raw.startsWith("'") && raw.endsWith("'")) || (raw.startsWith('"') && raw.endsWith('"'))) {
-        raw = raw.slice(1, -1);
-      }
-
-      let credentials = JSON.parse(raw);
-      if (typeof credentials === 'string') {
-        credentials = JSON.parse(credentials);
-      }
-
-      if (credentials.private_key) {
-        credentials.private_key = credentials.private_key
-          .replace(/\\n/g, '\n')
-          .replace(/\r\n/g, '\n')
-          .trim();
-        if (!credentials.private_key.endsWith('\n')) credentials.private_key += '\n';
-      }
-
+      const credentials = readGoogleCredentialsFromEnv();
       const keyFile = path.join(os.tmpdir(), 'muta-farm-google-vision-key.json');
       fs.writeFileSync(keyFile, JSON.stringify(credentials), { mode: 0o600 });
       return new vision.ImageAnnotatorClient({ keyFilename: keyFile });
@@ -91,6 +100,157 @@ function createVisionClient() {
 }
 
 const visionClient = createVisionClient();
+
+let driveClientPromise = null;
+let driveDownloadChecked = false;
+
+function escapeDriveQueryValue(value) {
+  return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+function createGoogleAuth(scopes) {
+  try {
+    const credentials = readGoogleCredentialsFromEnv();
+    if (credentials) {
+      return new google.auth.GoogleAuth({ credentials, scopes });
+    }
+  } catch (e) {
+    log('Google credentials env is invalid for Drive:', e.message);
+  }
+
+  if (
+    process.env.GOOGLE_APPLICATION_CREDENTIALS &&
+    fs.existsSync(process.env.GOOGLE_APPLICATION_CREDENTIALS)
+  ) {
+    return new google.auth.GoogleAuth({
+      keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+      scopes,
+    });
+  }
+
+  return null;
+}
+
+async function getDriveClient() {
+  if (process.env.GOOGLE_DRIVE_ENABLED === 'false') return null;
+  if (!driveClientPromise) {
+    driveClientPromise = (async () => {
+      const auth = createGoogleAuth(['https://www.googleapis.com/auth/drive.file']);
+      if (!auth) return null;
+      return google.drive({ version: 'v3', auth });
+    })();
+  }
+  return driveClientPromise;
+}
+
+async function findDriveWorkbookFileId(drive) {
+  if (process.env.GOOGLE_DRIVE_FILE_ID) return process.env.GOOGLE_DRIVE_FILE_ID;
+
+  const state = await readJson(DRIVE_STATE_PATH, {});
+  if (state.fileId) {
+    try {
+      await drive.files.get({ fileId: state.fileId, fields: 'id,name,trashed' });
+      return state.fileId;
+    } catch (e) {
+      log('Stored Drive file id was not usable:', e.message);
+    }
+  }
+
+  const escapedName = escapeDriveQueryValue(WORKBOOK_FILENAME);
+  const clauses = [
+    `name='${escapedName}'`,
+    `mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'`,
+    'trashed=false',
+  ];
+  if (process.env.GOOGLE_DRIVE_FOLDER_ID) {
+    clauses.push(`'${escapeDriveQueryValue(process.env.GOOGLE_DRIVE_FOLDER_ID)}' in parents`);
+  }
+
+  const result = await drive.files.list({
+    q: clauses.join(' and '),
+    fields: 'files(id,name,modifiedTime)',
+    orderBy: 'modifiedTime desc',
+    pageSize: 1,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+
+  const fileId = result.data.files?.[0]?.id || '';
+  if (fileId) await writeJson(DRIVE_STATE_PATH, { fileId, fileName: WORKBOOK_FILENAME });
+  return fileId;
+}
+
+async function downloadWorkbookFromDriveIfNeeded() {
+  if (driveDownloadChecked || fs.existsSync(WORKBOOK_PATH)) return;
+  driveDownloadChecked = true;
+
+  const drive = await getDriveClient();
+  if (!drive) return;
+
+  try {
+    const fileId = await findDriveWorkbookFileId(drive);
+    if (!fileId) return;
+    await ensureDir(EXCEL_DIR);
+    const response = await drive.files.get(
+      { fileId, alt: 'media', supportsAllDrives: true },
+      { responseType: 'stream' }
+    );
+    await pipeline(response.data, fs.createWriteStream(WORKBOOK_PATH));
+    log(`Downloaded workbook from Google Drive: ${WORKBOOK_FILENAME}`);
+  } catch (e) {
+    log('Google Drive workbook download skipped:', e.message);
+  }
+}
+
+async function uploadWorkbookToDrive() {
+  const drive = await getDriveClient();
+  if (!drive || !fs.existsSync(WORKBOOK_PATH)) return false;
+
+  try {
+    const fileId = await findDriveWorkbookFileId(drive);
+    const media = {
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      body: fs.createReadStream(WORKBOOK_PATH),
+    };
+
+    if (fileId) {
+      await drive.files.update({
+        fileId,
+        media,
+        fields: 'id,name,modifiedTime',
+        supportsAllDrives: true,
+      });
+      log(`Updated Google Drive workbook: ${WORKBOOK_FILENAME}`);
+      return true;
+    }
+
+    const requestBody = {
+      name: WORKBOOK_FILENAME,
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    };
+    if (process.env.GOOGLE_DRIVE_FOLDER_ID) {
+      requestBody.parents = [process.env.GOOGLE_DRIVE_FOLDER_ID];
+    }
+
+    const created = await drive.files.create({
+      requestBody,
+      media,
+      fields: 'id,name,modifiedTime',
+      supportsAllDrives: true,
+    });
+    await writeJson(DRIVE_STATE_PATH, { fileId: created.data.id, fileName: WORKBOOK_FILENAME });
+    log(`Created Google Drive workbook: ${WORKBOOK_FILENAME}`);
+    return true;
+  } catch (e) {
+    log('Google Drive workbook upload failed:', e.message);
+    return false;
+  }
+}
+
+async function saveWorkbook(wb) {
+  await wb.xlsx.writeFile(WORKBOOK_PATH);
+  await uploadWorkbookToDrive();
+}
 
 const accountRules = [
   { account: '肥料費', words: ['肥料', '化成肥料', '堆肥', '石灰', '苦土', '液肥'] },
@@ -489,6 +649,7 @@ function styleHeader(row, fill = '1F4E78') {
 
 async function ensureWorkbook() {
   await ensureDir(EXCEL_DIR);
+  await downloadWorkbookFromDriveIfNeeded();
   const wb = new ExcelJS.Workbook();
   if (fs.existsSync(WORKBOOK_PATH)) {
     await wb.xlsx.readFile(WORKBOOK_PATH);
@@ -546,7 +707,7 @@ async function ensureWorkbook() {
     { width: 14 }, { width: 34 }, { width: 16 }, { width: 14 }, { width: 16 }, { width: 14 },
   ];
 
-  await wb.xlsx.writeFile(WORKBOOK_PATH);
+  await saveWorkbook(wb);
   return wb;
 }
 
@@ -593,7 +754,7 @@ async function appendToWorkbook(analysis, image, ocrText) {
     copy.addRow([analysis.date, analysis.summary || analysis.product || '経費', '', '', analysis.account || '雑費', analysis.amount]);
   }
 
-  await wb.xlsx.writeFile(WORKBOOK_PATH);
+  await saveWorkbook(wb);
   return { id, kind: analysis.entryType };
 }
 
@@ -833,7 +994,7 @@ async function modifyLastEntry(text, userId) {
 
   if (/削除/.test(text)) {
     ws.spliceRows(target.number, 1);
-    await wb.xlsx.writeFile(WORKBOOK_PATH);
+    await saveWorkbook(wb);
     return '直前の登録を削除しました。';
   }
 
@@ -848,7 +1009,7 @@ async function modifyLastEntry(text, userId) {
     }
 
     const copyUpdated = updateCopySheetAmount(wb, session, target, correctedAmount);
-    await wb.xlsx.writeFile(WORKBOOK_PATH);
+    await saveWorkbook(wb);
     return copyUpdated
       ? `金額を ${yen(correctedAmount)} に変更しました。青色申告コピペ用シートも更新しました。`
       : `金額を ${yen(correctedAmount)} に変更しました。`;
@@ -863,7 +1024,7 @@ async function modifyLastEntry(text, userId) {
       account: account.account,
       sourceText: session.lastOcrText,
     });
-    await wb.xlsx.writeFile(WORKBOOK_PATH);
+    await saveWorkbook(wb);
     return learned
       ? `分類を ${account.account} に変更しました。次回から「${keyword}」は ${account.account} として覚えます。`
       : `分類を ${account.account} に変更しました。`;
