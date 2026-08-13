@@ -44,7 +44,16 @@ const openai = process.env.OPENAI_API_KEY
 function createVisionClient() {
   if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
     try {
-      const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
+      let raw = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON.trim();
+      if (raw.startsWith("'") && raw.endsWith("'")) raw = raw.slice(1, -1);
+      const credentials = JSON.parse(raw);
+      if (credentials.private_key) {
+        credentials.private_key = credentials.private_key
+          .replace(/\\n/g, '\n')
+          .replace(/\r\n/g, '\n')
+          .trim();
+        if (!credentials.private_key.endsWith('\n')) credentials.private_key += '\n';
+      }
       return new vision.ImageAnnotatorClient({
         credentials,
         projectId: credentials.project_id,
