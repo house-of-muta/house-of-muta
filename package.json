@@ -1,19 +1,25 @@
 {
   "name": "muta-farm-ai",
   "version": "1.0.0",
+  "description": "MUTA Farm AI - LINE receipt OCR, AI analysis, and Excel bookkeeping",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "check": "node --check index.js"
   },
   "engines": {
     "node": ">=20.0.0"
   },
   "dependencies": {
+    "@google-cloud/vision": "^4.3.2",
     "@line/bot-sdk": "^9.5.1",
     "dotenv": "^16.4.7",
+    "exceljs": "^4.4.0",
     "express": "^4.21.2",
     "helmet": "^8.0.0",
-    "morgan": "^1.10.0"
+    "morgan": "^1.10.0",
+    "node-cron": "^3.0.3",
+    "openai": "^4.77.0"
   }
 }
