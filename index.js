@@ -1,59 +1,95 @@
-const express = require("express")
-const line = require("@line/bot-sdk")
-const calendar = require("./calendar")
-const ai = require("./ai")
+require("dotenv").config();
 
-const app = express()
+const express = require("express");
+const helmet = require("helmet");
+const morgan = require("morgan");
+const line = require("@line/bot-sdk");
 
-const config = {
-  channelAccessToken: process.env.LINE_ACCESS_TOKEN,
-  channelSecret: process.env.LINE_CHANNEL_SECRET
+const app = express();
+
+const lineConfig = {
+  channelAccessToken:
+    process.env.LINE_CHANNEL_ACCESS_TOKEN || process.env.LINE_ACCESS_TOKEN,
+  channelSecret: process.env.LINE_CHANNEL_SECRET,
 };
 
-const client = new line.Client(config)
+const client = new line.Client(lineConfig);
 
-app.post("/webhook", line.middleware(config), async (req, res) => {
+app.use(helmet());
+app.use(morgan("combined"));
+
+app.get("/", (_req, res) => {
+  res.json({
+    name: "MUTA Farm AI",
+    status: "ok",
+    message: "LINE receipt OCR farm bookkeeping system is running",
+    webhook: "/webhook",
+  });
+});
+
+app.get("/health", (_req, res) => {
+  res.json({
+    ok: true,
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.post("/webhook", line.middleware(lineConfig), async (req, res) => {
   try {
-    await Promise.all(req.body.events.map(handleEvent))
-    res.status(200).end()
-  } catch (err) {
-    console.error(err)
-    res.status(500).end()
+    await Promise.all((req.body.events || []).map(handleEvent));
+    res.status(200).end();
+  } catch (error) {
+    console.error(error);
+    res.status(200).end();
   }
-})
+});
 
 async function handleEvent(event) {
-  if (event.type !== "message" || event.message.type !== "text") return null
+  if (event.type !== "message") return null;
 
-  const text = event.message.text.trim()
-
-  // 予定一覧
-  if (text === "予定") {
-    return calendar.list(client, event)
+  if (event.message.type === "image") {
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text:
+        "画像を受信しました。\n次の段階でOCR・AI解析・Excel記帳へ接続します。\ncredentials.jsonは使用しない構成です。",
+    });
   }
 
-  // 今日
-  if (text === "今日") {
-    return calendar.today(client, event)
+  if (event.message.type === "text") {
+    const text = event.message.text.trim();
+
+    if (text.includes("利益")) {
+      return reply(event, "利益集計機能へ接続予定です。");
+    }
+
+    if (text.includes("売上")) {
+      return reply(event, "売上集計機能へ接続予定です。");
+    }
+
+    if (text.includes("経費")) {
+      return reply(event, "経費集計機能へ接続予定です。");
+    }
+
+    return reply(
+      event,
+      "MUTA Farm AIです。\nレシート・納品書・領収書・売上伝票の写真を送ってください。"
+    );
   }
-// 空き時間
-if (text.includes("空いてる") || text.includes("空き時間")) {
-  return calendar.freeTime(client, event, text)
+
+  return reply(event, "画像または文字メッセージを送ってください。");
 }
-  // 予定登録
-  if (text.startsWith("予定追加")) {
-    return calendar.add(client, event, text)
-  }
 
-  // 削除（複数OK）
-  if (text.startsWith("削除")) {
-    return calendar.remove(client, event, text)
-  }
-
-  // AI会話
-  return ai.chat(client, event, text)
+function reply(event, text) {
+  return client.replyMessage(event.replyToken, {
+    type: "text",
+    text,
+  });
 }
 
-app.listen(process.env.PORT || 3000, () => {
+const port = process.env.PORT || 3000;
+
+app.listen(port, () => {
+  console.log(`MUTA Farm AI listening on port ${port}`);
+});
   //console.log("server running")
 })
