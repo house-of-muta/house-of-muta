@@ -41,16 +41,34 @@ const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
 
-function setupGoogleCredentials() {
-  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) return;
-  if (!process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) return;
-  const p = path.join(os.tmpdir(), 'muta-farm-google-credentials.json');
-  fs.writeFileSync(p, process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON, { mode: 0o600 });
-  process.env.GOOGLE_APPLICATION_CREDENTIALS = p;
+function createVisionClient() {
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
+    try {
+      const credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON);
+      return new vision.ImageAnnotatorClient({
+        credentials,
+        projectId: credentials.project_id,
+      });
+    } catch (e) {
+      log('GOOGLE_APPLICATION_CREDENTIALS_JSON is invalid. OpenAI Vision will be used:', e.message);
+    }
+  }
+
+  if (
+    process.env.GOOGLE_APPLICATION_CREDENTIALS &&
+    fs.existsSync(process.env.GOOGLE_APPLICATION_CREDENTIALS)
+  ) {
+    return new vision.ImageAnnotatorClient();
+  }
+
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    log(`GOOGLE_APPLICATION_CREDENTIALS was ignored because the file does not exist: ${process.env.GOOGLE_APPLICATION_CREDENTIALS}`);
+  }
+
+  return null;
 }
 
-setupGoogleCredentials();
-const visionClient = new vision.ImageAnnotatorClient();
+const visionClient = createVisionClient();
 
 const accountRules = [
   { account: '肥料費', words: ['肥料', '化成肥料', '堆肥', '石灰', '苦土', '液肥'] },
@@ -181,9 +199,42 @@ function findProduct(text) {
 }
 
 async function extractText(buffer) {
-  const [result] = await visionClient.textDetection({ image: { content: buffer } });
-  const text = result.fullTextAnnotation?.text || result.textAnnotations?.[0]?.description || '';
-  return text.trim();
+  if (visionClient) {
+    try {
+      const [result] = await visionClient.textDetection({ image: { content: buffer } });
+      const text = result.fullTextAnnotation?.text || result.textAnnotations?.[0]?.description || '';
+      if (text.trim()) return text.trim();
+    } catch (e) {
+      log('Google Vision OCR failed, fallback to OpenAI Vision:', e.message);
+    }
+  }
+
+  if (!openai) {
+    throw new Error('OCR credentials are missing. Set GOOGLE_APPLICATION_CREDENTIALS_JSON or OPENAI_API_KEY.');
+  }
+
+  const base64 = buffer.toString('base64');
+  const res = await openai.chat.completions.create({
+    model: process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    temperature: 0,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: 'この画像の文字をOCRしてください。推測で補完せず、読めた文字だけを日本語で改行を保って返してください。',
+          },
+          {
+            type: 'image_url',
+            image_url: { url: `data:image/jpeg;base64,${base64}` },
+          },
+        ],
+      },
+    ],
+  });
+
+  return (res.choices?.[0]?.message?.content || '').trim();
 }
 
 async function analyzeWithOpenAI(ocrText) {
