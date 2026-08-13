@@ -556,32 +556,32 @@ async function appendToWorkbook(analysis, image, ocrText) {
 
   if (analysis.entryType === 'sale') {
     const ws = wb.getWorksheet('売上');
-    const row = ws.addRow({
+    const row = ws.addRow([
       id,
-      date: analysis.date,
-      buyer: analysis.buyer || '販売先不明',
-      product: analysis.product || analysis.summary || '商品未確認',
-      quantity: analysis.quantity || 1,
-      unitPrice: analysis.unitPrice || analysis.amount,
-      amount: analysis.amount,
-      image: image.relativePath,
-      ocr: ocrText,
-    });
+      analysis.date,
+      analysis.buyer || '販売先不明',
+      analysis.product || analysis.summary || '商品未確認',
+      analysis.quantity || 1,
+      analysis.unitPrice || analysis.amount,
+      analysis.amount,
+      image.relativePath,
+      ocrText,
+    ]);
     row.getCell(7).numFmt = '#,##0';
   } else {
     const ws = wb.getWorksheet('経費');
-    const row = ws.addRow({
+    const row = ws.addRow([
       id,
-      date: analysis.date,
-      store: analysis.store || '店舗不明',
-      summary: analysis.summary || analysis.product || '摘要未確認',
-      account: analysis.account || '雑費',
-      quantity: analysis.quantity || 1,
-      amount: analysis.amount,
-      tax: analysis.tax || 0,
-      image: image.relativePath,
-      ocr: ocrText,
-    });
+      analysis.date,
+      analysis.store || '店舗不明',
+      analysis.summary || analysis.product || '摘要未確認',
+      analysis.account || '雑費',
+      analysis.quantity || 1,
+      analysis.amount,
+      analysis.tax || 0,
+      image.relativePath,
+      ocrText,
+    ]);
     row.getCell(7).numFmt = '#,##0';
     row.getCell(8).numFmt = '#,##0';
   }
@@ -777,7 +777,10 @@ function findNewestDataRow(ws, kind) {
   ws.eachRow((row, rowNumber) => {
     if (rowNumber <= 1) return;
     const id = row.getCell(1).value;
-    if (!id) return;
+    const date = row.getCell(2).value;
+    const amount = row.getCell(7).value;
+    const hasUsefulValue = row.values.some((value, index) => index > 1 && value !== null && value !== undefined && value !== '');
+    if (!id && !date && !amount && !hasUsefulValue) return;
     const time = parseEntryIdTime(id) || rowNumber;
     if (!newest || time > newest.time) newest = { kind, ws, row, time };
   });
