@@ -199,42 +199,13 @@ function findProduct(text) {
 }
 
 async function extractText(buffer) {
-  if (visionClient) {
-    try {
-      const [result] = await visionClient.textDetection({ image: { content: buffer } });
-      const text = result.fullTextAnnotation?.text || result.textAnnotations?.[0]?.description || '';
-      if (text.trim()) return text.trim();
-    } catch (e) {
-      log('Google Vision OCR failed, fallback to OpenAI Vision:', e.message);
-    }
+  if (!visionClient) {
+    throw new Error('Google Vision credentials are missing. Set GOOGLE_APPLICATION_CREDENTIALS_JSON.');
   }
 
-  if (!openai) {
-    throw new Error('OCR credentials are missing. Set GOOGLE_APPLICATION_CREDENTIALS_JSON or OPENAI_API_KEY.');
-  }
-
-  const base64 = buffer.toString('base64');
-  const res = await openai.chat.completions.create({
-    model: process.env.OPENAI_VISION_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini',
-    temperature: 0,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'text',
-            text: 'この画像の文字をOCRしてください。推測で補完せず、読めた文字だけを日本語で改行を保って返してください。',
-          },
-          {
-            type: 'image_url',
-            image_url: { url: `data:image/jpeg;base64,${base64}` },
-          },
-        ],
-      },
-    ],
-  });
-
-  return (res.choices?.[0]?.message?.content || '').trim();
+  const [result] = await visionClient.textDetection({ image: { content: buffer } });
+  const text = result.fullTextAnnotation?.text || result.textAnnotations?.[0]?.description || '';
+  return text.trim();
 }
 
 async function analyzeWithOpenAI(ocrText) {
@@ -614,7 +585,17 @@ async function modifyLastEntry(text, userId) {
 async function handleImage(event) {
   const buffer = await getMessageContent(event.message.id);
   const hash = hashBuffer(buffer);
-  const ocrText = await extractText(buffer);
+  let ocrText = '';
+  try {
+    ocrText = await extractText(buffer);
+  } catch (e) {
+    const message = String(e.message || '');
+    if (message.includes('Google Vision credentials are missing')) {
+      await replyText(event.replyToken, 'Google Vision OCRの認証情報が未設定です。RenderにGOOGLE_APPLICATION_CREDENTIALS_JSONを設定してください。');
+      return;
+    }
+    throw e;
+  }
   if (!ocrText) {
     await replyText(event.replyToken, '読み取れませんでした。明るい場所で、紙全体が入るように再撮影してください。');
     return;
