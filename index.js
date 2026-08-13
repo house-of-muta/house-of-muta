@@ -615,6 +615,18 @@ async function handleImage(event) {
       await replyText(event.replyToken, 'Google Vision OCRの認証情報が未設定です。RenderにGOOGLE_APPLICATION_CREDENTIALS_JSONを設定してください。');
       return;
     }
+    if (message.includes('requires billing to be enabled')) {
+      await replyText(event.replyToken, 'Google Cloudの請求設定が未有効です。Cloud Vision APIを使うには、プロジェクトのBillingを有効化してください。');
+      return;
+    }
+    if (message.includes('Cloud Vision API has not been used') || message.includes('it is disabled')) {
+      await replyText(event.replyToken, 'Cloud Vision APIが未有効です。Google CloudでVision APIを有効化してから、数分後に再送してください。');
+      return;
+    }
+    if (message.includes('PERMISSION_DENIED')) {
+      await replyText(event.replyToken, 'Google Vision OCRの権限エラーです。Cloud Vision APIの有効化、Billing、サービスアカウント権限を確認してください。');
+      return;
+    }
     throw e;
   }
   if (!ocrText) {
