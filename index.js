@@ -42,11 +42,23 @@ const openai = process.env.OPENAI_API_KEY
   : null;
 
 function createVisionClient() {
-  if (process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON) {
+  const rawCredential =
+    process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64
+      ? Buffer.from(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON_BASE64.trim(), 'base64').toString('utf8')
+      : process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON;
+
+  if (rawCredential) {
     try {
-      let raw = process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON.trim();
-      if (raw.startsWith("'") && raw.endsWith("'")) raw = raw.slice(1, -1);
-      const credentials = JSON.parse(raw);
+      let raw = rawCredential.trim();
+      if ((raw.startsWith("'") && raw.endsWith("'")) || (raw.startsWith('"') && raw.endsWith('"'))) {
+        raw = raw.slice(1, -1);
+      }
+
+      let credentials = JSON.parse(raw);
+      if (typeof credentials === 'string') {
+        credentials = JSON.parse(credentials);
+      }
+
       if (credentials.private_key) {
         credentials.private_key = credentials.private_key
           .replace(/\\n/g, '\n')
@@ -54,12 +66,12 @@ function createVisionClient() {
           .trim();
         if (!credentials.private_key.endsWith('\n')) credentials.private_key += '\n';
       }
-      return new vision.ImageAnnotatorClient({
-        credentials,
-        projectId: credentials.project_id,
-      });
+
+      const keyFile = path.join(os.tmpdir(), 'muta-farm-google-vision-key.json');
+      fs.writeFileSync(keyFile, JSON.stringify(credentials), { mode: 0o600 });
+      return new vision.ImageAnnotatorClient({ keyFilename: keyFile });
     } catch (e) {
-      log('GOOGLE_APPLICATION_CREDENTIALS_JSON is invalid. OpenAI Vision will be used:', e.message);
+      log('Google Vision credentials env is invalid:', e.message);
     }
   }
 
