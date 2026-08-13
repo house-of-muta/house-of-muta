@@ -191,12 +191,29 @@ function inferEntryType(text, docType) {
 
 function findAmount(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const priority = lines.find((l) => /合計|総計|税込|請求金額|領収金額/.test(l));
-  const source = priority || text;
-  const nums = [...source.matchAll(/(\d{1,3}(?:,\d{3})+|\d+)\s*円?/g)].map((m) => onlyNumber(m[1]));
-  if (nums.length) return Math.max(...nums);
-  const all = [...text.matchAll(/(\d{1,3}(?:,\d{3})+|\d+)\s*円?/g)].map((m) => onlyNumber(m[1]));
-  return all.length ? Math.max(...all) : 0;
+  const moneyLimit = Number(process.env.MAX_RECEIPT_AMOUNT || 10000000);
+  const normalize = (value) => onlyNumber(
+    String(value)
+      .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+      .replace(/[，,]/g, '')
+  );
+  const valid = (n) => Number.isFinite(n) && n > 0 && n <= moneyLimit;
+  const numbersFrom = (source, requireYen) => {
+    const yen = requireYen ? '円' : '円?';
+    const re = new RegExp(`(?:￥|¥)?\\s*([0-9０-９]{1,3}(?:[,，][0-9０-９]{3})+|[0-9０-９]{1,8})\\s*${yen}`, 'g');
+    return [...source.matchAll(re)].map((m) => normalize(m[1])).filter(valid);
+  };
+
+  const priorityLines = lines.filter((l) => /合計|総計|税込|お支払|支払|請求金額|領収金額|現計|合算|計$/.test(l));
+  for (const line of priorityLines) {
+    const candidates = numbersFrom(line, false);
+    if (candidates.length) return candidates[candidates.length - 1];
+  }
+
+  const yenCandidates = numbersFrom(text, true);
+  if (yenCandidates.length) return yenCandidates[yenCandidates.length - 1];
+
+  return 0;
 }
 
 function findTax(text) {
