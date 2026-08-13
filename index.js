@@ -33,6 +33,10 @@ const lineClient = new line.messagingApi.MessagingApiClient({
   channelAccessToken: lineConfig.channelAccessToken,
 });
 
+const blobClient = new line.messagingApi.MessagingApiBlobClient({
+  channelAccessToken: lineConfig.channelAccessToken,
+});
+
 const openai = process.env.OPENAI_API_KEY
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : null;
@@ -423,7 +427,7 @@ async function appendToWorkbook(analysis, image, ocrText) {
 
 async function getMessageContent(messageId) {
   const chunks = [];
-  const stream = await lineClient.getMessageContent(messageId);
+  const stream = await blobClient.getMessageContent(messageId);
   for await (const chunk of stream) chunks.push(chunk);
   return Buffer.concat(chunks);
 }
