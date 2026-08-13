@@ -757,16 +757,75 @@ function updateCopySheetAmount(wb, session, target, amount) {
   return false;
 }
 
+function parseEntryIdTime(id) {
+  const match = String(id || '').match(/^(sale|expense)_(\d+)$/);
+  return match ? Number(match[2]) : 0;
+}
+
+function findRowById(ws, id) {
+  if (!ws || !id) return null;
+  let found = null;
+  ws.eachRow((row, rowNumber) => {
+    if (rowNumber > 1 && row.getCell(1).value === id) found = row;
+  });
+  return found;
+}
+
+function findNewestDataRow(ws, kind) {
+  if (!ws) return null;
+  let newest = null;
+  ws.eachRow((row, rowNumber) => {
+    if (rowNumber <= 1) return;
+    const id = row.getCell(1).value;
+    if (!id) return;
+    const time = parseEntryIdTime(id) || rowNumber;
+    if (!newest || time > newest.time) newest = { kind, ws, row, time };
+  });
+  return newest;
+}
+
+function findEditableEntry(wb, session) {
+  const kinds = [
+    { kind: 'expense', sheet: '経費' },
+    { kind: 'sale', sheet: '売上' },
+  ];
+
+  if (session.lastId && session.lastKind) {
+    const sheetName = session.lastKind === 'sale' ? '売上' : '経費';
+    const ws = wb.getWorksheet(sheetName);
+    const row = findRowById(ws, session.lastId);
+    if (row) return { kind: session.lastKind, ws, row };
+  }
+
+  const newest = kinds
+    .map(({ kind, sheet }) => findNewestDataRow(wb.getWorksheet(sheet), kind))
+    .filter(Boolean)
+    .sort((a, b) => b.time - a.time)[0];
+
+  return newest ? { kind: newest.kind, ws: newest.ws, row: newest.row } : null;
+}
+
+function isModifyCommand(text) {
+  const normalized = String(text || '')
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+  if (/削除|変更|修正|訂正|直して|なおして/.test(normalized)) return true;
+  if (/(金額|売上|単価|合計|小計).*\d/.test(normalized)) return true;
+  return false;
+}
+
 async function modifyLastEntry(text, userId) {
+  if (!isModifyCommand(text)) return null;
+
   const session = await getSession(userId);
-  if (!session.lastId || !session.lastKind) return null;
 
   const wb = await ensureWorkbook();
-  const ws = wb.getWorksheet(session.lastKind === 'sale' ? '売上' : '経費');
-  let target;
-  ws.eachRow((row, n) => {
-    if (n > 1 && row.getCell(1).value === session.lastId) target = row;
-  });
+  const editable = findEditableEntry(wb, session);
+  if (!editable) return '修正できる登録がまだありません。先にレシート写真を送ってください。';
+
+  const ws = editable.ws;
+  const target = editable.row;
+  session.lastKind = editable.kind;
+  session.lastId = target.getCell(1).value;
   if (!target) return '直前の登録が見つかりませんでした。';
 
   if (/削除/.test(text)) {
