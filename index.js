@@ -696,6 +696,67 @@ async function setSession(userId, data) {
   await writeJson(SESSION_PATH, all);
 }
 
+function parseCorrectionAmount(text) {
+  const normalized = String(text || '')
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/[，,]/g, '')
+    .replace(/[￥¥]/g, '円');
+
+  const patterns = [
+    /(?:金額|売上|単価|合計|小計).*?(\d{1,8})\s*円?/,
+    /(\d{1,8})\s*円?\s*(?:へ|に)?\s*(?:変更|修正|訂正|直して|なおして)/,
+    /(?:変更|修正|訂正|直して|なおして).*?(\d{1,8})\s*円?/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = normalized.match(pattern);
+    if (!match) continue;
+    const amount = onlyNumber(match[1]);
+    const maxAmount = Number(process.env.MAX_RECEIPT_AMOUNT || 10000000);
+    if (Number.isFinite(amount) && amount > 0 && amount <= maxAmount) return amount;
+  }
+
+  return 0;
+}
+
+function cellPlainValue(cell) {
+  const value = cell?.value;
+  if (value && typeof value === 'object' && 'result' in value) return value.result;
+  if (value && typeof value === 'object' && 'text' in value) return value.text;
+  return value;
+}
+
+function updateCopySheetAmount(wb, session, target, amount) {
+  const copy = wb.getWorksheet('青色申告コピペ用');
+  if (!copy) return false;
+
+  const date = String(cellPlainValue(target.getCell(2)) || '');
+  const summary = String(cellPlainValue(target.getCell(4)) || '');
+  const category = session.lastKind === 'sale'
+    ? String(cellPlainValue(target.getCell(3)) || '')
+    : String(cellPlainValue(target.getCell(5)) || '');
+
+  for (let rowNumber = copy.rowCount; rowNumber >= 2; rowNumber -= 1) {
+    const row = copy.getRow(rowNumber);
+    const copyDate = String(cellPlainValue(row.getCell(1)) || '');
+    const copySummary = String(cellPlainValue(row.getCell(2)) || '');
+    const incomeCategory = String(cellPlainValue(row.getCell(3)) || '');
+    const expenseCategory = String(cellPlainValue(row.getCell(5)) || '');
+
+    if (session.lastKind === 'sale') {
+      if (copyDate === date && (copySummary === summary || incomeCategory === category)) {
+        row.getCell(4).value = amount;
+        return true;
+      }
+    } else if (copyDate === date && (copySummary === summary || expenseCategory === category)) {
+      row.getCell(6).value = amount;
+      return true;
+    }
+  }
+
+  return false;
+}
+
 async function modifyLastEntry(text, userId) {
   const session = await getSession(userId);
   if (!session.lastId || !session.lastKind) return null;
@@ -714,12 +775,21 @@ async function modifyLastEntry(text, userId) {
     return '直前の登録を削除しました。';
   }
 
-  const amountMatch = text.match(/金額.*?(\d{1,3}(?:,\d{3})+|\d+)/);
-  if (amountMatch) {
-    const amount = onlyNumber(amountMatch[1]);
-    target.getCell(session.lastKind === 'sale' ? 7 : 7).value = amount;
+  const correctedAmount = parseCorrectionAmount(text);
+  if (correctedAmount) {
+    if (session.lastKind === 'sale') {
+      target.getCell(7).value = correctedAmount;
+      const quantity = Number(target.getCell(5).value || 0);
+      if (quantity > 0) target.getCell(6).value = Math.round(correctedAmount / quantity);
+    } else {
+      target.getCell(7).value = correctedAmount;
+    }
+
+    const copyUpdated = updateCopySheetAmount(wb, session, target, correctedAmount);
     await wb.xlsx.writeFile(WORKBOOK_PATH);
-    return `金額を ${yen(amount)} に変更しました。`;
+    return copyUpdated
+      ? `金額を ${yen(correctedAmount)} に変更しました。青色申告コピペ用シートも更新しました。`
+      : `金額を ${yen(correctedAmount)} に変更しました。`;
   }
 
   const account = accountRules.find((r) => text.includes(r.account) || text.includes(r.account.replace('費', '')));
