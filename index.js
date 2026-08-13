@@ -23,6 +23,7 @@ const UPLOAD_DIR = path.join(ROOT, 'uploads');
 const WORKBOOK_PATH = path.join(EXCEL_DIR, `FarmBook_${EXCEL_YEAR}.xlsx`);
 const REGISTRY_PATH = path.join(DATA_DIR, 'registry.json');
 const SESSION_PATH = path.join(DATA_DIR, 'sessions.json');
+const LEARNING_RULES_PATH = path.join(DATA_DIR, 'learningRules.json');
 
 const lineConfig = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN || process.env.LINE_ACCESS_TOKEN || '',
@@ -94,7 +95,7 @@ const visionClient = createVisionClient();
 const accountRules = [
   { account: '肥料費', words: ['肥料', '化成肥料', '堆肥', '石灰', '苦土', '液肥'] },
   { account: '農薬費', words: ['農薬', 'ダコニール', '除草剤', '殺菌剤', '殺虫剤', '展着剤'] },
-  { account: '諸材料費', words: ['マルチ', '黒マルチ', '支柱', 'ネット', '培土', 'ポット', '苗箱'] },
+  { account: '諸材料費', words: ['マルチ', '黒マルチ', '支柱', 'ネット', '培土', 'ポット', '苗箱', '手袋', 'グローブ', '軍手', 'メカニカルグローブ'] },
   { account: '種苗費', words: ['種', '種子', '苗', '苗木'] },
   { account: '農具費', words: ['農具', '鍬', '鎌', 'ハサミ', '噴霧器', '工具'] },
   { account: '修繕費', words: ['修理', '修繕', '部品', '交換', '整備'] },
@@ -167,7 +168,35 @@ function parseDate(text) {
   return formatDate(now);
 }
 
+function readJsonSync(file, fallback) {
+  try {
+    if (!fs.existsSync(file)) return fallback;
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeLearningText(text) {
+  return String(text || '')
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/[\s　]+/g, '')
+    .toLowerCase();
+}
+
+function inferLearnedAccount(text) {
+  const normalized = normalizeLearningText(text);
+  const rules = readJsonSync(LEARNING_RULES_PATH, []);
+  const matched = rules
+    .filter((rule) => rule.account && rule.keyword && normalized.includes(normalizeLearningText(rule.keyword)))
+    .sort((a, b) => normalizeLearningText(b.keyword).length - normalizeLearningText(a.keyword).length);
+  return matched[0]?.account || '';
+}
+
 function inferAccount(text) {
+  const learned = inferLearnedAccount(text);
+  if (learned) return learned;
+
   for (const rule of accountRules) {
     if (rule.words.some((w) => text.includes(w))) return rule.account;
   }
@@ -192,26 +221,48 @@ function inferEntryType(text, docType) {
 function findAmount(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const moneyLimit = Number(process.env.MAX_RECEIPT_AMOUNT || 10000000);
+
   const normalize = (value) => onlyNumber(
     String(value)
       .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
       .replace(/[，,]/g, '')
   );
+
   const valid = (n) => Number.isFinite(n) && n > 0 && n <= moneyLimit;
-  const numbersFrom = (source, requireYen) => {
-    const yen = requireYen ? '円' : '円?';
-    const re = new RegExp(`(?:￥|¥)?\\s*([0-9０-９]{1,3}(?:[,，][0-9０-９]{3})+|[0-9０-９]{1,8})\\s*${yen}`, 'g');
-    return [...source.matchAll(re)].map((m) => normalize(m[1])).filter(valid);
+
+  const looksLikeQuantity = (source, startIndex, raw) => {
+    const before = source.slice(Math.max(0, startIndex - 3), startIndex);
+    const after = source.slice(startIndex + raw.length, startIndex + raw.length + 3);
+    return /[数量点個件枚]/.test(before + after);
   };
 
-  const priorityLines = lines.filter((l) => /合計|総計|税込|お支払|支払|請求金額|領収金額|現計|合算|計$/.test(l));
+  const numbersFrom = (source, mode = 'any') => {
+    const re = /(?:￥|¥|円)?\s*([0-9０-９]{1,3}(?:[,，][0-9０-９]{3})+|[0-9０-９]{1,8})\s*(?:円)?/g;
+    return [...source.matchAll(re)]
+      .filter((m) => {
+        const hasCurrency = /[￥¥円]/.test(m[0]);
+        if (mode === 'currency' && !hasCurrency) return false;
+        if (looksLikeQuantity(source, m.index || 0, m[1])) return false;
+        return true;
+      })
+      .map((m) => normalize(m[1]))
+      .filter(valid);
+  };
+
+  const priorityWords = /合計|総計|税込|お支払|支払|請求金額|領収金額|現計|合算|小計|計$/;
+  const priorityLines = [];
+  lines.forEach((line, index) => {
+    if (!priorityWords.test(line)) return;
+    priorityLines.push([line, lines[index + 1], lines[index + 2]].filter(Boolean).join(' '));
+  });
+
   for (const line of priorityLines) {
-    const candidates = numbersFrom(line, false);
-    if (candidates.length) return candidates[candidates.length - 1];
+    const candidates = numbersFrom(line, 'any');
+    if (candidates.length) return Math.max(...candidates);
   }
 
-  const yenCandidates = numbersFrom(text, true);
-  if (yenCandidates.length) return yenCandidates[yenCandidates.length - 1];
+  const yenCandidates = numbersFrom(text, 'currency');
+  if (yenCandidates.length) return Math.max(...yenCandidates);
 
   return 0;
 }
@@ -223,7 +274,20 @@ function findTax(text) {
 
 function findName(text, entryType) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const skip = /合計|小計|消費税|日付|領収|請求|納品|TEL|電話|\d{4}|\d+円/;
+  const knownStores = [
+    ['CAINZ', 'カインズ'],
+    ['カインズ', 'カインズ'],
+    ['コメリ', 'コメリ'],
+    ['JA', 'JA'],
+    ['農協', '農協'],
+    ['ホームセンター', 'ホームセンター'],
+  ];
+
+  for (const [keyword, name] of knownStores) {
+    if (text.toUpperCase().includes(keyword.toUpperCase())) return name;
+  }
+
+  const skip = /合計|小計|消費税|日付|領収|請求|納品|TEL|電話|登録番号|会員|ポイント|バーコード|QR|LINE|House of MUTA|担当者|返信|\d{1,2}:\d{2}|\d{4}|\d+円|[¥￥]\d+/;
   const candidate = lines.find((l) => !skip.test(l) && l.length >= 2 && l.length <= 30);
   if (entryType === 'sale') return candidate || '販売先不明';
   return candidate || '店舗不明';
@@ -310,7 +374,10 @@ async function analyzeText(ocrText) {
       ai.quantity = onlyNumber(ai.quantity) || 1;
       ai.unitPrice = onlyNumber(ai.unitPrice);
       ai.tax = onlyNumber(ai.tax);
-      if (ai.entryType === 'expense' && !ai.account) ai.account = inferAccount(ocrText);
+      if (ai.entryType === 'expense') {
+        const learned = inferLearnedAccount(ocrText);
+        ai.account = learned || ai.account || inferAccount(ocrText);
+      }
       return ai;
     }
   } catch (e) {
@@ -331,6 +398,51 @@ async function writeJson(file, value) {
   await ensureDir(path.dirname(file));
   await fsp.writeFile(file, JSON.stringify(value, null, 2), 'utf8');
 }
+
+async function saveLearningRule({ keyword, account, sourceText }) {
+  const cleanKeyword = normalizeLearningText(keyword);
+  if (!cleanKeyword || cleanKeyword.length < 2 || !account) return false;
+
+  const rules = await readJson(LEARNING_RULES_PATH, []);
+  const existing = rules.find((rule) => normalizeLearningText(rule.keyword) === cleanKeyword);
+  if (existing) {
+    existing.account = account;
+    existing.updatedAt = new Date().toISOString();
+    existing.count = Number(existing.count || 1) + 1;
+  } else {
+    rules.push({
+      keyword: String(keyword).trim(),
+      account,
+      sourceText: String(sourceText || '').slice(0, 300),
+      count: 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  await writeJson(LEARNING_RULES_PATH, rules);
+  return true;
+}
+
+function buildLearningKeyword(session, target) {
+  const values = [
+    session.lastProduct,
+    session.lastSummary,
+    target?.getCell?.(4)?.value,
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+
+  const firstUseful = values.find((value) => value.length >= 2 && value.length <= 40);
+  if (firstUseful) return firstUseful;
+
+  const ocrLines = String(session.lastOcrText || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length >= 2 && line.length <= 40)
+    .filter((line) => !/合計|小計|消費税|領収|請求|納品|TEL|電話|登録番号|会員|ポイント|\d{1,2}:\d{2}|\d+円|[¥￥]\d+/.test(line));
+
+  return ocrLines[0] || '';
+}
+
 
 function hashBuffer(buffer) {
   return crypto.createHash('sha256').update(buffer).digest('hex');
@@ -613,8 +725,16 @@ async function modifyLastEntry(text, userId) {
   const account = accountRules.find((r) => text.includes(r.account) || text.includes(r.account.replace('費', '')));
   if (account && session.lastKind === 'expense') {
     target.getCell(5).value = account.account;
+    const keyword = buildLearningKeyword(session, target);
+    const learned = await saveLearningRule({
+      keyword,
+      account: account.account,
+      sourceText: session.lastOcrText,
+    });
     await wb.xlsx.writeFile(WORKBOOK_PATH);
-    return `分類を ${account.account} に変更しました。`;
+    return learned
+      ? `分類を ${account.account} に変更しました。次回から「${keyword}」は ${account.account} として覚えます。`
+      : `分類を ${account.account} に変更しました。`;
   }
 
   return null;
@@ -661,7 +781,14 @@ async function handleImage(event) {
   const image = await saveImage(buffer, analysis.entryType, analysis.date);
   const saved = await appendToWorkbook(analysis, image, ocrText);
   await registerEntry({ hash, date: analysis.date, amount: analysis.amount, kind: saved.kind, id: saved.id, image: image.relativePath });
-  await setSession(event.source.userId || 'unknown', { lastId: saved.id, lastKind: saved.kind });
+  await setSession(event.source.userId || 'unknown', {
+    lastId: saved.id,
+    lastKind: saved.kind,
+    lastOcrText: ocrText,
+    lastSummary: analysis.summary || '',
+    lastProduct: analysis.product || '',
+    lastAccount: analysis.account || '',
+  });
 
   if (saved.kind === 'sale') {
     await replyText(event.replyToken, [
