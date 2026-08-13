@@ -5,6 +5,7 @@ const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
 const express = require('express');
 const helmet = require('helmet');
@@ -135,7 +136,7 @@ async function getDriveClient() {
   if (process.env.GOOGLE_DRIVE_ENABLED === 'false') return null;
   if (!driveClientPromise) {
     driveClientPromise = (async () => {
-      const auth = createGoogleAuth(['https://www.googleapis.com/auth/drive.file']);
+      const auth = createGoogleAuth(['https://www.googleapis.com/auth/drive']);
       if (!auth) return null;
       return google.drive({ version: 'v3', auth });
     })();
@@ -250,6 +251,144 @@ async function uploadWorkbookToDrive() {
 async function saveWorkbook(wb) {
   await wb.xlsx.writeFile(WORKBOOK_PATH);
   await uploadWorkbookToDrive();
+}
+
+async function findDriveFolder(drive, name, parentId = '') {
+  const clauses = [
+    `name='${escapeDriveQueryValue(name)}'`,
+    `mimeType='application/vnd.google-apps.folder'`,
+    'trashed=false',
+  ];
+  if (parentId) clauses.push(`'${escapeDriveQueryValue(parentId)}' in parents`);
+
+  const result = await drive.files.list({
+    q: clauses.join(' and '),
+    fields: 'files(id,name)',
+    pageSize: 1,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+
+  return result.data.files?.[0]?.id || '';
+}
+
+async function ensureDriveFolder(drive, name, parentId = '') {
+  const existingId = await findDriveFolder(drive, name, parentId);
+  if (existingId) return existingId;
+
+  const requestBody = {
+    name,
+    mimeType: 'application/vnd.google-apps.folder',
+  };
+  if (parentId) requestBody.parents = [parentId];
+
+  const created = await drive.files.create({
+    requestBody,
+    fields: 'id,name',
+    supportsAllDrives: true,
+  });
+  return created.data.id;
+}
+
+async function ensureDrivePath(parts) {
+  const drive = await getDriveClient();
+  if (!drive) return { drive: null, folderId: '' };
+
+  let parentId = process.env.GOOGLE_DRIVE_FOLDER_ID || '';
+  for (const part of parts) {
+    parentId = await ensureDriveFolder(drive, part, parentId);
+  }
+
+  return { drive, folderId: parentId };
+}
+
+async function uploadBufferToDrive({ buffer, fileName, mimeType, folderId }) {
+  const drive = await getDriveClient();
+  if (!drive || !folderId) return '';
+
+  const existing = await drive.files.list({
+    q: [
+      `name='${escapeDriveQueryValue(fileName)}'`,
+      `'${escapeDriveQueryValue(folderId)}' in parents`,
+      'trashed=false',
+    ].join(' and '),
+    fields: 'files(id,name)',
+    pageSize: 1,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+  });
+
+  const media = { mimeType, body: Readable.from(buffer) };
+  const existingId = existing.data.files?.[0]?.id || '';
+  if (existingId) {
+    await drive.files.update({
+      fileId: existingId,
+      media,
+      fields: 'id,name',
+      supportsAllDrives: true,
+    });
+    return existingId;
+  }
+
+  const created = await drive.files.create({
+    requestBody: { name: fileName, parents: [folderId] },
+    media,
+    fields: 'id,name',
+    supportsAllDrives: true,
+  });
+  return created.data.id;
+}
+
+async function saveReceiptDataToDrive({ buffer, image, analysis, ocrText, hash }) {
+  const date = new Date(analysis.date);
+  const y = String(date.getFullYear());
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const base = analysis.entryType === 'sale' ? 'sales' : 'receipts';
+
+  try {
+    const { folderId } = await ensureDrivePath([base, y, m]);
+    if (!folderId) return { imageDriveId: '', jsonDriveId: '' };
+
+    const imageDriveId = await uploadBufferToDrive({
+      buffer,
+      fileName: image.fileName,
+      mimeType: 'image/jpeg',
+      folderId,
+    });
+
+    const dataFileName = image.fileName.replace(/\.[^.]+$/, '.json');
+    const payload = {
+      savedAt: new Date().toISOString(),
+      hash,
+      imageFileName: image.fileName,
+      localPath: image.relativePath,
+      entryType: analysis.entryType,
+      date: analysis.date,
+      store: analysis.store || '',
+      buyer: analysis.buyer || '',
+      summary: analysis.summary || '',
+      product: analysis.product || '',
+      account: analysis.account || '',
+      quantity: analysis.quantity || 1,
+      unitPrice: analysis.unitPrice || 0,
+      amount: analysis.amount || 0,
+      tax: analysis.tax || 0,
+      ocrText,
+    };
+
+    const jsonDriveId = await uploadBufferToDrive({
+      buffer: Buffer.from(JSON.stringify(payload, null, 2), 'utf8'),
+      fileName: dataFileName,
+      mimeType: 'application/json',
+      folderId,
+    });
+
+    log(`Saved receipt data to Google Drive: ${base}/${y}/${m}/${image.fileName}`);
+    return { imageDriveId, jsonDriveId };
+  } catch (e) {
+    log('Google Drive receipt data upload failed:', e.message);
+    return { imageDriveId: '', jsonDriveId: '' };
+  }
 }
 
 const accountRules = [
@@ -1072,8 +1211,18 @@ async function handleImage(event) {
   }
 
   const image = await saveImage(buffer, analysis.entryType, analysis.date);
+  const driveSaved = await saveReceiptDataToDrive({ buffer, image, analysis, ocrText, hash });
   const saved = await appendToWorkbook(analysis, image, ocrText);
-  await registerEntry({ hash, date: analysis.date, amount: analysis.amount, kind: saved.kind, id: saved.id, image: image.relativePath });
+  await registerEntry({
+    hash,
+    date: analysis.date,
+    amount: analysis.amount,
+    kind: saved.kind,
+    id: saved.id,
+    image: image.relativePath,
+    imageDriveId: driveSaved.imageDriveId,
+    jsonDriveId: driveSaved.jsonDriveId,
+  });
   await setSession(event.source.userId || 'unknown', {
     lastId: saved.id,
     lastKind: saved.kind,
